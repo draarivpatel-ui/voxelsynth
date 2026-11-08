@@ -1,0 +1,27 @@
+{
+  "name": "voxelsynth",
+  "version": "1.0.0",
+  "description": "Offline parametric voxel and SDF CSG CAD studio with watertight STL, OBJ, and OpenSCAD export",
+  "main": "voxel.js",
+  "scripts": {
+    "test": "node --test test.js && node ui-test.js",
+    "test:core": "node --test test.js",
+    "test:ui": "node ui-test.js"
+  },
+  "keywords": [
+    "voxel",
+    "sdf",
+    "csg",
+    "cad",
+    "stl",
+    "obj",
+    "openscad",
+    "3d-printing",
+    "manifold"
+  ],
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  }
+}

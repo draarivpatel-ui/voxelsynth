@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="VoxelSynth is an offline voxel and SDF CSG CAD studio with STL, OBJ, and OpenSCAD export.">
+<title>VoxelSynth - Parametric Voxel CSG CAD Studio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#workspace">Skip to workspace</a>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="32" height="32"><path d="M16 2 29 9v14L16 30 3 23V9z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 9l13 7 13-7M16 16v14" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </span>
+    <div>
+      <h1>VoxelSynth</h1>
+      <p class="tagline">Parametric voxel + SDF CSG CAD studio</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span class="offline-badge" title="No network requests are made by this application">Offline first</span>
+    <button id="theme-toggle" class="btn btn-ghost" type="button" aria-label="Toggle light or dark theme" title="Toggle theme (T)">Dark theme</button>
+    <button id="help-toggle" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="help-panel" title="Keyboard shortcuts (?)">Shortcuts</button>
+  </div>
+</header>
+
+<section id="help-panel" class="help-panel" hidden>
+  <h2>Keyboard shortcuts</h2>
+  <dl class="shortcut-grid">
+    <dt>1 / 2 / 3 / 4</dt><dd>Load desk organizer, SD card vault, cable comb, or Pico mount</dd>
+    <dt>B / C / S</dt><dd>Select box, cylinder, or sphere primitive</dd>
+    <dt>A / D</dt><dd>Set add or subtract CSG mode</dd>
+    <dt>M</dt><dd>Mirror the grid along X</dd>
+    <dt>H</dt><dd>Apply a hollow shell</dd>
+    <dt>Arrow left / right</dt><dd>Rotate yaw</dd>
+    <dt>Arrow up / down</dt><dd>Change pitch</dd>
+    <dt>Page up / down</dt><dd>Move the Z slice</dd>
+    <dt>T</dt><dd>Toggle light and dark theme</dd>
+    <dt>R</dt><dd>Reset the workspace</dd>
+    <dt>?</dt><dd>Show or hide this panel</dd>
+  </dl>
+</section>
+
+<main id="workspace" class="workspace">
+
+  <section class="panel panel-controls" aria-labelledby="controls-heading">
+    <h2 id="controls-heading" class="panel-title">Build</h2>
+
+    <div class="field">
+      <label for="preset-select">Preset loader</label>
+      <select id="preset-select">
+        <option value="deskOrganizer">Desk organizer</option>
+        <option value="sdCardVault">SD card vault</option>
+        <option value="cableComb">Cable comb</option>
+        <option value="rpiPicoMount">Raspberry Pi Pico mount</option>
+      </select>
+      <div class="row">
+        <button id="load-preset" class="btn btn-primary" type="button">Load preset</button>
+        <button id="reset-grid" class="btn" type="button" title="Reset (R)">Reset</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="field-label">Grid</span>
+      <div class="triple">
+        <label class="mini">X <input id="grid-nx" type="number" min="4" max="48" value="24"></label>
+        <label class="mini">Y <input id="grid-ny" type="number" min="4" max="48" value="18"></label>
+        <label class="mini">Z <input id="grid-nz" type="number" min="2" max="32" value="12"></label>
+      </div>
+      <label class="mini wide">Pitch (mm) <input id="grid-pitch" type="number" min="0.5" max="10" step="0.5" value="2"></label>
+      <button id="apply-grid" class="btn btn-block" type="button">Rebuild empty grid</button>
+    </div>
+
+    <div class="field">
+      <span class="field-label">CSG mode</span>
+      <div class="segmented" role="group" aria-label="CSG operation">
+        <button class="seg active" data-op="add" type="button" aria-pressed="true">Add</button>
+        <button class="seg" data-op="subtract" type="button" aria-pressed="false">Subtract</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="field-label">Primitive</span>
+      <div class="segmented" role="group" aria-label="Primitive type">
+        <button class="seg active" data-prim="box" type="button" aria-pressed="true">Box</button>
+        <button class="seg" data-prim="cylinder" type="button" aria-pressed="false">Cylinder</button>
+        <button class="seg" data-prim="sphere" type="button" aria-pressed="false">Sphere</button>
+      </div>
+      <div class="triple">
+        <label class="mini">CX <input id="prim-x" type="number" step="1" value="6"></label>
+        <label class="mini">CY <input id="prim-y" type="number" step="1" value="6"></label>
+        <label class="mini">CZ <input id="prim-z" type="number" step="1" value="4"></label>
+      </div>
+      <div class="triple">
+        <label class="mini">W <input id="prim-w" type="number" step="1" value="10"></label>
+        <label class="mini">D <input id="prim-d" type="number" step="1" value="10"></label>
+        <label class="mini">R <input id="prim-r" type="number" step="1" value="8"></label>
+      </div>
+      <label class="mini wide">Height / radius (mm) <input id="prim-h" type="number" step="1" value="8"></label>
+      <button id="apply-primitive" class="btn btn-primary btn-block" type="button">Apply primitive</button>
+    </div>
+
+    <div class="field">
+      <span class="field-label">Transforms</span>
+      <div class="row">
+        <button id="mirror-x" class="btn" type="button" title="Mirror X (M)">Mirror X</button>
+        <button id="mirror-y" class="btn" type="button">Mirror Y</button>
+      </div>
+      <label class="mini wide">Shell wall (mm) <input id="shell-wall" type="number" min="1" max="12" step="1" value="3"></label>
+      <button id="apply-shell" class="btn btn-block" type="button" title="Shell (H)">Hollow shell</button>
+    </div>
+
+    <div class="field">
+      <span class="field-label">Material estimate</span>
+      <label class="mini wide">Infill (%) <input id="infill" type="number" min="0" max="100" step="5" value="100"></label>
+      <label class="mini wide">Material
+        <select id="material">
+          <option value="PLA">PLA, 1.24 g/cm3</option>
+          <option value="PETG">PETG, 1.27 g/cm3</option>
+        </select>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel panel-view" aria-labelledby="view-heading">
+    <div class="view-head">
+      <h2 id="view-heading" class="panel-title">Isometric workspace</h2>
+      <div class="view-status">
+        <span id="mode-chip" class="chip">Box / Add</span>
+        <span id="slice-chip" class="chip">Z layer 1 / 12</span>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <canvas id="viewport" width="900" height="620" aria-label="Isometric voxel projection. Click a cell to toggle it."></canvas>
+      <div class="canvas-hint">Drag to rotate. Scroll to zoom. Click a voxel to toggle it.</div>
+    </div>
+
+    <div class="slider-row">
+      <label for="yaw">Yaw <output id="yaw-out">35 deg</output></label>
+      <input id="yaw" type="range" min="-180" max="180" value="35">
+      <label for="pitch">Pitch <output id="pitch-out">28 deg</output></label>
+      <input id="pitch" type="range" min="-80" max="80" value="28">
+      <label for="slice">Z slice <output id="slice-out">1</output></label>
+      <input id="slice" type="range" min="0" max="11" value="0">
+    </div>
+
+    <div class="row wrap">
+      <button id="view-top" class="btn btn-small" type="button">Top view</button>
+      <button id="view-iso" class="btn btn-small" type="button">Isometric</button>
+      <button id="view-front" class="btn btn-small" type="button">Front</button>
+      <button id="toggle-wire" class="btn btn-small" type="button" aria-pressed="false">Wireframe</button>
+      <button id="toggle-slice" class="btn btn-small" type="button" aria-pressed="true">Slice overlay</button>
+      <button id="cycle-slice-mode" class="btn btn-small" type="button" aria-pressed="false">Slice only</button>
+    </div>
+  </section>
+
+  <section class="panel panel-output" aria-labelledby="output-heading">
+    <h2 id="output-heading" class="panel-title">Diagnostics</h2>
+    <div class="health" id="health-badge" role="status">Manifold check running</div>
+    <table class="diag-table">
+      <caption class="sr-only">Live manifold diagnostics for the current grid</caption>
+      <thead><tr><th scope="col">Metric</th><th scope="col">Value</th></tr></thead>
+      <tbody id="diag-body"></tbody>
+    </table>
+
+    <h3 class="subhead">Export</h3>
+    <label class="mini wide" for="export-name">Solid name</label>
+    <input id="export-name" class="wide-input" type="text" value="voxelsynth_model" spellcheck="false">
+
+    <div class="export-grid">
+      <button class="btn btn-export" data-export="ascii-stl" type="button">ASCII STL</button>
+      <button class="btn btn-export" data-export="binary-stl" type="button">Binary STL</button>
+      <button class="btn btn-export" data-export="obj" type="button">Wavefront OBJ</button>
+      <button class="btn btn-export" data-export="scad" type="button">OpenSCAD</button>
+    </div>
+    <p class="export-note">Downloads are generated locally with Blob URLs. Nothing is uploaded.</p>
+
+    <h3 class="subhead">Copy to clipboard</h3>
+    <div class="export-grid">
+      <button class="btn btn-copy" data-copy="ascii-stl" type="button">Copy STL</button>
+      <button class="btn btn-copy" data-copy="obj" type="button">Copy OBJ</button>
+      <button class="btn btn-copy" data-copy="scad" type="button">Copy OpenSCAD</button>
+      <button class="btn btn-copy" data-copy="json" type="button">Copy grid JSON</button>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>VoxelSynth v1.0.0. Integer lattice CSG, greedy face culling, and signed volume diagnostics. Runs entirely in your browser.</p>
+  <p><a href="https://github.com/draarivpatel-ui/voxelsynth">Source and documentation</a></p>
+</footer>
+
+<script src="voxel.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
