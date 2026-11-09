@@ -40,7 +40,7 @@
   }
 
   /* ---------------------------------------------------------------- */
-  /* Projection                                                       */
+  /* Orthographic Isometric Projection                                */
   /* ---------------------------------------------------------------- */
 
   function view() {
@@ -80,13 +80,14 @@
       if (q[1] < minY) minY = q[1];
       if (q[1] > maxY) maxY = q[1];
     });
-    var margin = 42;
+    var margin = 48;
     var sx = (canvas.width - 2 * margin) / Math.max(1, maxX - minX);
     var sy = (canvas.height - 2 * margin) / Math.max(1, maxY - minY);
+    var s = Math.min(sx, sy) * state.zoom;
     return {
-      scale: Math.min(sx, sy) * state.zoom,
-      originX: canvas.width / 2 - ((minX + maxX) / 2) * Math.min(sx, sy) * state.zoom,
-      originY: canvas.height / 2 - ((minY + maxY) / 2) * Math.min(sx, sy) * state.zoom,
+      scale: s,
+      originX: (canvas.width * 0.44) - ((minX + maxX) / 2) * s,
+      originY: (canvas.height * 0.52) - ((minY + maxY) / 2) * s,
       center: [wMm / 2, dMm / 2, hMm / 2]
     };
   }
@@ -96,12 +97,12 @@
   /* ---------------------------------------------------------------- */
 
   var FACE_DEFS = [
-    { axis: 0, sign: 1, corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], normal: [1, 0, 0], shade: 0.72 },
-    { axis: 0, sign: -1, corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]], normal: [-1, 0, 0], shade: 0.58 },
-    { axis: 1, sign: 1, corners: [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]], normal: [0, 1, 0], shade: 0.86 },
-    { axis: 1, sign: -1, corners: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], normal: [0, -1, 0], shade: 0.66 },
-    { axis: 2, sign: 1, corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], normal: [0, 0, 1], shade: 1 },
-    { axis: 2, sign: -1, corners: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], normal: [0, 0, -1], shade: 0.48 }
+    { axis: 0, sign: 1, corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], normal: [1, 0, 0], shade: 0.76 },
+    { axis: 0, sign: -1, corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]], normal: [-1, 0, 0], shade: 0.60 },
+    { axis: 1, sign: 1, corners: [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]], normal: [0, 1, 0], shade: 0.88 },
+    { axis: 1, sign: -1, corners: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], normal: [0, -1, 0], shade: 0.68 },
+    { axis: 2, sign: 1, corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], normal: [0, 0, 1], shade: 1.00 },
+    { axis: 2, sign: -1, corners: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], normal: [0, 0, -1], shade: 0.50 }
   ];
 
   function isFaceVisible(def, v) {
@@ -174,11 +175,12 @@
   }
 
   /* ---------------------------------------------------------------- */
-  /* Rendering                                                        */
+  /* CAD & Layer Cross-Section Rendering                              */
   /* ---------------------------------------------------------------- */
 
   function shadeColor(hex, factor) {
     var h = hex.replace('#', '');
+    if (h.length !== 6) h = '647382';
     var rgb = [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
     return 'rgb(' + rgb.map(function (c) { return Math.round(Math.min(255, c * factor)); }).join(',') + ')';
   }
@@ -192,46 +194,170 @@
     if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lineWidth || 1; ctx.stroke(); }
   }
 
+  function drawBuildPlateCage(fit, v) {
+    var g = state.grid;
+    var p = g.pitchMm;
+    var wMm = g.nx * p, dMm = g.ny * p, hMm = g.nz * p;
+    var lineCol = cssVar('--line-strong') || '#8d897f';
+
+    /* Floor grid on z = 0 build plate. */
+    ctx.strokeStyle = lineColor();
+    ctx.lineWidth = 0.7;
+    var stepX = Math.max(1, Math.round(4 / p)) * p;
+    for (var x = 0; x <= wMm + 0.001; x += stepX) {
+      var a0 = project([x, 0, 0], v, fit.originX, fit.originY, fit.scale);
+      var a1 = project([x, dMm, 0], v, fit.originX, fit.originY, fit.scale);
+      ctx.beginPath(); ctx.moveTo(a0[0], a0[1]); ctx.lineTo(a1[0], a1[1]); ctx.stroke();
+    }
+    for (var y = 0; y <= dMm + 0.001; y += stepX) {
+      var b0 = project([0, y, 0], v, fit.originX, fit.originY, fit.scale);
+      var b1 = project([wMm, y, 0], v, fit.originX, fit.originY, fit.scale);
+      ctx.beginPath(); ctx.moveTo(b0[0], b0[1]); ctx.lineTo(b1[0], b1[1]); ctx.stroke();
+    }
+
+    /* Outer build volume bounding box. */
+    ctx.strokeStyle = lineCol;
+    ctx.lineWidth = 1.1;
+    var baseCorners = [
+      project([0, 0, 0], v, fit.originX, fit.originY, fit.scale),
+      project([wMm, 0, 0], v, fit.originX, fit.originY, fit.scale),
+      project([wMm, dMm, 0], v, fit.originX, fit.originY, fit.scale),
+      project([0, dMm, 0], v, fit.originX, fit.originY, fit.scale)
+    ];
+    drawPolygon(baseCorners, null, lineCol, 1.2);
+  }
+
+  function drawLayerInspectorHUD(sliceColor) {
+    var g = state.grid;
+    var z0 = state.slice;
+    var boxW = 216;
+    var boxH = 186;
+    var x0 = canvas.width - boxW - 14;
+    var y0 = 14;
+    var panelBg = cssVar('--panel') || '#efede8';
+    var borderCol = cssVar('--line-strong') || '#8d897f';
+    var inkCol = cssVar('--ink') || '#1b1d20';
+    var softCol = cssVar('--ink-soft') || '#565a60';
+
+    ctx.save();
+    ctx.fillStyle = panelBg;
+    ctx.fillRect(x0, y0, boxW, boxH);
+    ctx.strokeStyle = borderCol;
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(x0, y0, boxW, boxH);
+
+    /* Header bar in inspector inset. */
+    ctx.fillStyle = sliceColor;
+    ctx.fillRect(x0, y0, boxW, 22);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 10.5px ui-monospace, monospace';
+    ctx.fillText('2D Z-SLICE INSPECTOR  [L' + (z0 + 1) + '/' + g.nz + ']', x0 + 8, y0 + 15);
+
+    var padX = 12;
+    var availW = boxW - 2 * padX;
+    var availH = boxH - 52;
+    var cellPx = Math.max(2, Math.floor(Math.min(availW / g.nx, availH / g.ny)));
+    var gridW = cellPx * g.nx;
+    var gridH = cellPx * g.ny;
+    var gx0 = x0 + Math.floor((boxW - gridW) / 2);
+    var gy0 = y0 + 28 + Math.floor((availH - gridH) / 2);
+
+    var solidOnSlice = 0;
+    for (var yy = 0; yy < g.ny; yy++) {
+      for (var xx = 0; xx < g.nx; xx++) {
+        var filled = V.getVoxel(g, xx, yy, z0) === 1;
+        var cx = gx0 + xx * cellPx;
+        var cy = gy0 + (g.ny - 1 - yy) * cellPx;
+        if (filled) {
+          solidOnSlice++;
+          ctx.fillStyle = sliceColor;
+          ctx.fillRect(cx, cy, cellPx - 1, cellPx - 1);
+        } else {
+          ctx.fillStyle = state.theme === 'dark' ? '#141619' : '#dcd8cf';
+          ctx.fillRect(cx, cy, cellPx - 1, cellPx - 1);
+        }
+      }
+    }
+
+    ctx.fillStyle = inkCol;
+    ctx.font = '10.5px ui-monospace, monospace';
+    var zMm = (z0 * g.pitchMm).toFixed(1);
+    ctx.fillText('Z=' + zMm + 'mm | ' + solidOnSlice + ' solid cells', x0 + 8, y0 + boxH - 8);
+    ctx.fillStyle = softCol;
+    ctx.restore();
+  }
+
+  function drawTelemetryHeader() {
+    var g = state.grid;
+    var inkCol = cssVar('--ink') || '#1b1d20';
+    var softCol = cssVar('--ink-soft') || '#565a60';
+    var panelBg = cssVar('--panel') || '#efede8';
+    var borderCol = cssVar('--line-strong') || '#8d897f';
+
+    ctx.save();
+    ctx.fillStyle = panelBg;
+    ctx.fillRect(12, 12, 344, 24);
+    ctx.strokeStyle = borderCol;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(12, 12, 344, 24);
+    ctx.fillStyle = inkCol;
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.fillText(
+      'ENV ' + (g.nx * g.pitchMm) + 'x' + (g.ny * g.pitchMm) + 'x' + (g.nz * g.pitchMm) +
+      'mm | YAW ' + Math.round(state.yawDeg) + ' | PITCH ' + Math.round(state.pitchDeg) +
+      ' | ZOOM ' + state.zoom.toFixed(2) + 'x',
+      20,
+      28
+    );
+    ctx.fillStyle = softCol;
+    ctx.restore();
+  }
+
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     var fit = buildFaces();
-    var base = cssVar('--voxel-a') || '#4b8ff5';
-    var edge = cssVar('--panel-alt') || '#f7f9fc';
-    var line = cssVar('--line') || '#d9e0ea';
+    var v = view();
+    var base = cssVar('--voxel-a') || '#647382';
+    var edge = state.theme === 'dark' ? '#181a1e' : '#2d333b';
+    var sliceColor = cssVar('--slice') || '#d4581d';
+
+    drawBuildPlateCage(fit, v);
 
     for (var i = 0; i < state.faces.length; i++) {
       var face = state.faces[i];
       var pts = face.pts.map(function (q) { return [q[0], q[1]]; });
       var fill = state.wireframe ? null : shadeColor(base, face.shade);
-      drawPolygon(pts, fill, state.wireframe ? base : edge, state.wireframe ? 1 : 0.7);
+      drawPolygon(pts, fill, state.wireframe ? base : edge, state.wireframe ? 1.0 : 0.65);
     }
 
     if (state.showSlice) {
-      var sliceColor = cssVar('--slice') || '#f2a33c';
       for (var j = 0; j < state.sliceCells.length; j++) {
         var cell = state.sliceCells[j];
         var poly = cell.pts.map(function (q) { return [q[0], q[1]]; });
-        ctx.globalAlpha = cell.filled ? 0.30 : 0.10;
+        ctx.globalAlpha = cell.filled ? 0.34 : 0.08;
         drawPolygon(poly, sliceColor, null);
-        ctx.globalAlpha = 0.85;
-        drawPolygon(poly, null, sliceColor, cell.filled ? 1.3 : 0.6);
+        ctx.globalAlpha = 0.88;
+        drawPolygon(poly, null, sliceColor, cell.filled ? 1.4 : 0.55);
         ctx.globalAlpha = 1;
       }
     }
 
-    drawAxes(fit, view());
+    drawAxes(fit, v);
+    drawTelemetryHeader();
+    drawLayerInspectorHUD(sliceColor);
   }
 
   function drawAxes(fit, v) {
+    /* Corner isometric axis triad + world origin axes. */
     var g = state.grid;
     var len = Math.min(g.nx, g.ny, g.nz) * g.pitchMm * 0.42;
     var origin = project([0, 0, 0], v, fit.originX, fit.originY, fit.scale);
     var axes = [
-      { p: [len, 0, 0], color: '#e05656', label: 'X' },
-      { p: [0, len, 0], color: '#3aa76d', label: 'Y' },
-      { p: [0, 0, len], color: '#4b8ff5', label: 'Z' }
+      { p: [len, 0, 0], unit: [1, 0, 0], color: '#d6453a', label: '+X' },
+      { p: [0, len, 0], unit: [0, 1, 0], color: '#2e8b57', label: '+Y' },
+      { p: [0, 0, len], unit: [0, 0, 1], color: '#2b6cb0', label: '+Z' }
     ];
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 11.5px ui-monospace, monospace';
     axes.forEach(function (axis) {
       var q = project(axis.p, v, fit.originX, fit.originY, fit.scale);
       ctx.beginPath();
@@ -241,13 +367,32 @@
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.fillStyle = axis.color;
-      ctx.fillText(axis.label, q[0] + 5, q[1] - 4);
+      ctx.fillText(axis.label, q[0] + 4, q[1] - 4);
+    });
+
+    /* Fixed bottom-left HUD triad. */
+    var hudX = 52;
+    var hudY = canvas.height - 54;
+    var hudLen = 28;
+    var o0 = project([0, 0, 0], v, 0, 0, 1);
+    axes.forEach(function (axis) {
+      var u = project(axis.unit, v, 0, 0, 1);
+      var dx = (u[0] - o0[0]) * hudLen;
+      var dy = (u[1] - o0[1]) * hudLen;
+      ctx.beginPath();
+      ctx.moveTo(hudX, hudY);
+      ctx.lineTo(hudX + dx, hudY + dy);
+      ctx.strokeStyle = axis.color;
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+      ctx.fillStyle = axis.color;
+      ctx.fillText(axis.label.slice(1), hudX + dx * 1.25 - 4, hudY + dy * 1.25 + 4);
     });
     ctx.strokeStyle = lineColor();
     ctx.lineWidth = 1;
   }
 
-  function lineColor() { return cssVar('--line') || '#d9e0ea'; }
+  function lineColor() { return cssVar('--line') || '#b9b5ab'; }
 
   /* ---------------------------------------------------------------- */
   /* Picking                                                          */
@@ -328,10 +473,10 @@
     }).join('');
     var badge = $('health-badge');
     if (s.watertight) {
-      badge.textContent = 'Watertight manifold. Every directed edge is paired.';
+      badge.textContent = 'MANIFOLD PASS: 0 unmatched half-edges.';
       badge.className = 'health';
     } else {
-      badge.textContent = s.triangleCount ? 'Open surface. Check unmatched edges.' : 'Empty grid. Add a primitive to begin.';
+      badge.textContent = s.triangleCount ? 'OPEN MESH: Check unmatched half-edges.' : 'EMPTY LATTICE: Add a CSG primitive.';
       badge.className = 'health bad';
     }
   }
@@ -475,7 +620,7 @@
   function setTheme(theme) {
     state.theme = theme;
     document.documentElement.setAttribute('data-theme', theme);
-    $('theme-toggle').textContent = theme === 'dark' ? 'Light theme' : 'Dark theme';
+    $('theme-toggle').textContent = theme === 'dark' ? 'Light sheet' : 'Dark sheet';
     try { localStorage.setItem('voxelsynth-theme', theme); } catch (err) { /* storage may be blocked */ }
     render();
   }
@@ -658,7 +803,7 @@
     state.grid = V.loadPreset('deskOrganizer', { pitchMm: 2, nx: 24, ny: 18, nz: 12 });
     state.theme = stored === 'dark' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', state.theme);
-    $('theme-toggle').textContent = state.theme === 'dark' ? 'Light theme' : 'Dark theme';
+    $('theme-toggle').textContent = state.theme === 'dark' ? 'Light sheet' : 'Dark sheet';
     bindEvents();
     recompute();
   }

@@ -1,208 +1,93 @@
 # VoxelSynth
 
-A parametric voxel and signed distance field CSG CAD studio for rapid 3D printable enclosures, desktop organizers, and mechanical fixtures. VoxelSynth builds watertight manifold surfaces on an integer lattice and exports ASCII STL, Binary STL, Wavefront OBJ, and OpenSCAD source.
+VoxelSynth is an offline integer-lattice constructive solid geometry (CSG) and signed distance field (SDF) CAD workstation built for 3D printable enclosures, cable combs, and PCB mounting fixtures. It constructs watertight manifold triangle meshes on a shared discrete lattice, verifies directed half-edge pairing and Euler characteristic in real time, and exports ASCII STL, Binary STL, Wavefront OBJ, and greedy cuboid-merged OpenSCAD scripts.
 
-Everything runs locally. There are no runtime dependencies, no build step, no network calls, and no telemetry. Open `index.html` from disk, host the folder on any static server, or use the GitHub Pages deployment.
+All computation runs locally in plain HTML, CSS, and JavaScript with zero runtime dependencies, zero build steps, and zero network requests.
 
-Live workspace: https://draarivpatel-ui.github.io/voxelsynth/
+Live workstation: https://aariv.me/voxelsynth/
 
-## Contents
+## Repository Structure
 
-| File | Purpose |
+| File | Responsibility |
 | --- | --- |
-| `voxel.js` | UMD core engine. Grid, CSG, SDF helpers, mesher, diagnostics, exporters, presets. |
-| `index.html` | Engineering workspace markup. |
-| `style.css` | Responsive light and dark theme plus print stylesheet. |
-| `app.js` | Canvas projection, interaction, diagnostics table, download and copy actions. |
-| `test.js` | 64 `node:test` assertions covering geometry, topology, exporters, and presets. |
-| `ui-test.js` | Headless DOM smoke test for the browser workspace. |
-| `LICENSE` | MIT license. |
+| `voxel.js` | UMD geometry engine: integer lattice, CSG boolean ops, SDF evaluators, 6-direction greedy quad mesher, half-edge verifier, and exporters |
+| `index.html` | Three-column engineering CAD & slicer workstation markup |
+| `style.css` | Architectural warm-gray vellum sheet and dark charcoal CAD theme plus print stylesheet |
+| `app.js` | Orthographic isometric canvas renderer, build-plate cage, 2D Z-slice cross-section inspector HUD, picking, and export handlers |
+| `test.js` | 64 `node:test` assertions covering CSG, SDFs, greedy meshing, topology invariants, and file exporters |
+| `ui-test.js` | Headless DOM smoke test verifying every control, keybind, preset, and export action |
+| `LICENSE` | MIT License |
 
-## Quick start
+## Running Locally
 
-Browser:
-
-```sh
-open index.html
-```
-
-Or serve the directory locally:
+Open `index.html` directly from disk or serve the directory over HTTP:
 
 ```sh
 python3 -m http.server 8000
+# open http://localhost:8000/
 ```
 
-Then visit `http://localhost:8000`.
+Run the automated test suite and headless UI smoke check with Node.js:
 
-Node.js:
+```sh
+node --test test.js
+# tests 64 | pass 64 | fail 0
+
+node ui-test.js
+# UI smoke test passed.
+```
+
+## Programmatic Usage (Node.js & Browser)
 
 ```js
 const V = require('./voxel.js');
+const fs = require('node:fs');
 
 const grid = V.deskOrganizerPreset({
   pitchMm: 2, nx: 32, ny: 22, nz: 12, wallMm: 4, compartments: 3
 });
 
 const mesh = V.extractManifoldMesh(grid, { infillPercent: 20 });
-console.log(mesh.stats.watertight);        // true
-console.log(mesh.stats.volumeCm3);         // enclosed volume in cubic centimetres
-console.log(mesh.stats.plaMassG);          // PLA estimate in grams
+console.log(mesh.stats.watertight);      // true (0 unmatched directed half-edges)
+console.log(mesh.stats.volumeCm3);       // enclosed volume via divergence theorem (cm3)
+console.log(mesh.stats.plaMassG);        // estimated PLA filament mass (g)
 
-const fs = require('node:fs');
 fs.writeFileSync('organizer.stl', V.exportAsciiSTL(mesh, 'organizer'));
 fs.writeFileSync('organizer.obj', V.exportOBJ(mesh, 'organizer'));
 fs.writeFileSync('organizer.scad', V.exportOpenSCAD(grid));
 ```
 
-Browser global:
+## Geometric & Topological Architecture
 
-```html
-<script src="voxel.js"></script>
-<script>
-  const g = window.VoxelSynth.rpiPicoMountPreset();
-</script>
-```
+### 1. Flat Uint8Array Lattice & 6-Neighbour Shell Erosion
 
-The UMD wrapper also supports AMD loaders.
+A lattice of `nx * ny * nz` cells with voxel pitch `pitchMm` is stored in a flat `Uint8Array` indexed by `x + nx * (y + ny * z)`. Boolean operations (`addBox`, `subtractBox`, `addCylinder`, `subtractCylinder`, `addSphere`, `subtractSphere`, `mirrorGrid`, `unionGrid`, `subtractGrid`) evaluate cell centers at `((x + 0.5) * pitchMm, (y + 0.5) * pitchMm, (z + 0.5) * pitchMm)`. `shellGrid(grid, wallMm)` performs `round(wallMm / pitchMm)` passes of 6-neighbour morphological erosion on the solid set and subtracts the surviving interior core from the original solid, leaving a closed shell of uniform wall thickness.
 
-Run the test suite:
+### 2. Analytic Signed Distance Fields (SDF)
 
-```sh
-node --test test.js
-```
+For smooth fillets and blended booleans, `sdfBox`, `sdfSphere`, and `sdfCylinder` evaluate exact signed distances in millimetres. Combinators `sdfUnion`, `sdfSubtract`, `sdfIntersect`, and polynomial `sdfSmoothUnion(a, b, k)` compose arbitrary implicit surfaces that `rasterizeSDF(grid, fn, op)` samples across the lattice.
 
-## Using the workspace
+### 3. Greedy Coplanar Quad Meshing Without T-Junctions
 
-1. Pick a preset from the loader, or rebuild an empty grid with your own X, Y, Z counts and pitch in millimetres.
-2. Select an operation (add or subtract) and a primitive (box, cylinder, or sphere). Parameters are entered in voxel cells for center and footprint, and in millimetres for height or radius, then applied at the current pitch.
-3. Drag on the canvas to rotate yaw and pitch. Scroll to zoom. Use the sliders for exact angles and for the Z layer scrubber.
-4. Click a visible voxel to remove it, or click an empty cell on the highlighted slice plane to add one. The slice overlay shows the active layer. Toggle "Slice only" to hide every layer above the scrubber and inspect the interior.
-5. Mirror or hollow the model with the transform buttons. Adjust infill and material to see live filament mass estimates.
-6. Download or copy ASCII STL, Binary STL, OBJ, OpenSCAD, or the serialized grid JSON.
+For each of the six principal axis directions (`+X, -X, +Y, -Y, +Z, -Z`), `buildQuads(grid)` extracts a 2D binary mask of solid voxels whose face neighbour in that direction is empty air. Internal faces between adjacent solid voxels are culled immediately. A greedy 2D sweep expands each exposed face into a maximal coplanar rectangle `[u0..u1, v0..v1]`, reducing flat walls to a handful of quads.
 
-Keyboard shortcuts: `1` to `4` load presets, `B`/`C`/`S` pick primitives, `A`/`D` pick operations, `M` mirrors X, `H` hollows, arrow keys rotate, `PageUp` and `PageDown` change the slice, `T` toggles theme, `R` resets, and `?` opens the shortcut panel.
+In a naive greedy mesher, triangulating each merged rectangle directly with two long triangles creates T-junctions wherever a long quad edge borders smaller neighbouring quads. Slicers such as PrusaSlicer and Cura flag T-junctions as non-manifold open edges. VoxelSynth resolves this by recording the greedy quad count and then emitting triangles on the shared integer vertex lattice so every unit boundary segment shares identical vertex indices with its neighbour across corners and steps. A defensive signed-volume pass checks the divergence-theorem volume over all triangles and flips winding if negative.
 
-The print stylesheet hides the controls and prints the viewport together with the diagnostics table as an engineering report.
+### 4. Half-Edge Manifold Verification & Euler Characteristic
 
-## Geometry model
+`extractManifoldMesh` verifies that every directed triangle edge `u -> v` has an exact opposite partner `v -> u` in the mesh. The diagnostics table reports:
 
-### Integer lattice
+- **Unmatched directed edges:** must equal `0` for `watertight = true`.
+- **Surface area (`mm2`) & Enclosed volume (`cm3`):** computed directly from triangle cross products and the divergence theorem `sum(a . (b x c)) / 6`, matching `voxelCount * pitchMm^3`.
+- **Euler characteristic (`chi = V - E + F`) & Genus estimate (`g = (2 - chi) / 2`):** calculated from unique vertices `V`, undirected edges `E`, and triangle count `F`.
+- **PLA (`1.24 g/cm3`) and PETG (`1.27 g/cm3`) filament mass:** scaled by enclosed volume and infill percentage.
 
-A grid of `nx * ny * nz` cells is stored in a flat `Uint8Array` with `x` as the fastest changing index:
+### 5. Exporters & OpenSCAD Cuboid Compression
 
-```
-index = x + nx * (y + ny * z)
-```
-
-Each cell is a cube of side `pitchMm`. CSG primitives rasterize against cell centers at `(x + 0.5) * pitchMm`, so a box from `a` to `b` millimetres covers cell indices `round(a / pitchMm)` through `round(b / pitchMm) - 1`. Coordinates outside the grid are treated as air, which means a filled block touching the boundary is still a closed solid.
-
-`addBox`, `subtractBox`, `addCylinder`, `subtractCylinder`, `addSphere`, `subtractSphere`, `mirrorGrid`, `shellGrid`, `unionGrid`, and `subtractGrid` all mutate and return the grid. `shellGrid` performs `round(wallThickness / pitchMm)` passes of six neighbour erosion on the solid set, then subtracts the surviving core from the original. That leaves a closed wall of the requested thickness.
-
-### Signed distance fields
-
-For workflows that start from analytic geometry, `sdfBox`, `sdfSphere`, and `sdfCylinder` return the signed distance from a point. `sdfUnion` is `min(a, b)`, `sdfSubtract` is `max(a, -b)`, `sdfIntersect` is `max(a, b)`, and `sdfSmoothUnion` blends with a polynomial smoothing kernel of radius `k`. `rasterizeSDF(grid, fn, operation)` samples the field at every cell center and sets or clears cells where the distance is nonpositive.
-
-Example of a rounded subtraction:
-
-```js
-const g = V.createGrid(30, 30, 16, 1);
-V.rasterizeSDF(g, (x, y, z) =>
-  V.sdfSubtract(
-    V.sdfBox(x, y, z, [2, 2, 2], [26, 26, 12]),
-    V.sdfSphere(x, y, z, 15, 15, 14, 9)
-  )
-);
-```
-
-### Greedy face culling
-
-For each of the six axis directions, the mesher builds a 2D mask of solid cells whose neighbour in that direction is air. Internal faces never enter the mask. A greedy sweep grows each mask region into a maximal rectangle, first along `u` and then along `v`, and emits one quad per rectangle. This is the standard face culling plus greedy merging pass used by voxel renderers.
-
-Each quad is then overlaid on a shared integer lattice. For every unit face cell it covers, the mesher emits two triangles whose vertices are lattice coordinates. Because all adjacent quads use the same lattice, shared boundaries are described by identical vertex pairs. This avoids T junctions that would otherwise appear where a long quad edge meets several short ones. A convex polygon fan on a merged quad would be faster to draw, but it cannot guarantee edge pairing, so watertightness takes priority over triangle count.
-
-Triangles are wound so the cross product of two edges agrees with the outward axis normal. A defensive pass computes the signed volume of the whole triangle set, and if it is negative the winding and normals are flipped.
-
-### Diagnostics
-
-For triangles with vertices `a`, `b`, `c`:
-
-```
-area    = 0.5 * |(b - a) x (c - a)|
-volume  = sum( a . (b x c) / 6 )
-```
-
-The divergence theorem turns the second sum into the enclosed volume in cubic millimetres. It matches `voxelCount * pitchMm^3` for every closed grid and is reported in cubic centimetres.
-
-Surface area is the sum of triangle areas. The bounding box is taken over all mesh vertices in millimetres. Filament mass is `volumeCm3 * (infill / 100) * density`, with PLA at `1.24 g/cm3` and PETG at `1.27 g/cm3`. A custom density can be passed to `estimateMass`.
-
-The topology check builds the set of directed triangle edges. A closed orientable manifold requires every `(u, v)` to have an opposite `(v, u)` with no extras. The Euler characteristic is `V - E + F`, computed from unique vertices, unique undirected edges, and triangle count. For a connected closed orientable surface, the genus is `(2 - chi) / 2`, so a sphere gives `chi = 2` and genus `0`, while one through hole gives `chi = 0` and genus `1`. Disconnected components shift `chi`, so the genus value is reported as an estimate.
-
-The naive triangle baseline is twelve triangles per solid voxel with no culling. `mergeRatio` compares that baseline with the emitted triangle count.
-
-### Exporters
-
-`exportAsciiSTL(mesh, name)` writes a named solid with one `facet normal` and three `vertex` records per triangle. `exportBinarySTL(mesh, name)` writes the 80 byte header, little endian facet count, and fifty bytes per facet. `exportOBJ(mesh, name)` emits indexed vertices, per face normals, and `f v//vn` faces. `exportOpenSCAD(grid, pitchMm)` greedily merges each Z layer into rectangles, then extrudes runs of identical rectangles into `cube()` calls inside a `union()`. It produces the same solid cell set with far fewer boxes than one cube per voxel.
-
-Names are sanitized to alphanumerics, dots, underscores, and hyphens so exported files are safe to use as identifiers.
-
-## API reference
-
-Grid: `createGrid`, `cloneGrid`, `getVoxel`, `setVoxel`, `inBounds`, `countVoxels`, `countExposedFaces`, `naiveTriangleCount`, `serializeGrid`, `deserializeGrid`.
-
-CSG: `addBox`, `subtractBox`, `addCylinder`, `subtractCylinder`, `addSphere`, `subtractSphere`, `mirrorGrid`, `shellGrid`, `unionGrid`, `subtractGrid`.
-
-SDF: `sdfBox`, `sdfSphere`, `sdfCylinder`, `sdfUnion`, `sdfSubtract`, `sdfIntersect`, `sdfSmoothUnion`, `rasterizeSDF`.
-
-Mesh: `extractManifoldMesh(grid, { infillPercent })`, `estimateMass(mesh, { material, infillPercent, density })`, `buildQuads(grid)`.
-
-Exports: `exportAsciiSTL`, `exportBinarySTL`, `exportOBJ`, `exportOpenSCAD`.
-
-Presets: `deskOrganizerPreset`, `sdCardVaultPreset`, `cableCombPreset`, `rpiPicoMountPreset`, `listPresets`, `loadPreset`.
-
-`extractManifoldMesh` returns `{ vertices, triangles, normals, vertexKeys, pitchMm, gridSize, infillPercent, stats }`. Vertices are `[x, y, z]` in millimetres. Triangles are triples of vertex indices. Normals are outward unit vectors. The `stats` object contains all values shown in the diagnostics table.
-
-## Built in presets
-
-| Preset | Description |
-| --- | --- |
-| `deskOrganizerPreset` | Partitioned tray with three pencil bores. Configurable compartment count and wall thickness. |
-| `sdCardVaultPreset` | Hollow walled case with a top slot, a rear stop, and a central screw clearance hole. |
-| `cableCombPreset` | Six rounded channels cut into a bar with two mounting holes. |
-| `rpiPicoMountPreset` | Rail plate with four raised standoffs and through holes for a Raspberry Pi Pico board. |
-
-All presets accept `{ pitchMm, nx, ny, nz, wallMm }` overrides.
-
-## Testing
-
-`test.js` uses the built in `node:test` runner and covers grid construction and validation, all CSG primitives on every axis, mirroring, shell erosion, face culling counts, greedy quad merging, exact volume checks, outward normals, surface area, bounding boxes, Euler characteristics, drilled hole genus, directed edge pairing for every preset, PLA and PETG mass estimates, infill clamping, ASCII and Binary STL structure, OBJ index validity, OpenSCAD box coverage, grid serialization, SDF combinators, and preset parameters.
-
-```sh
-node --test test.js
-# tests 64
-# pass 64
-# fail 0
-
-node ui-test.js
-# UI smoke test passed.
-```
-
-`ui-test.js` runs `voxel.js` and `app.js` inside a minimal headless DOM, then exercises every bound control, all keyboard shortcuts, preset loading, diagnostics rendering, and the export and copy actions.
-
-## Design notes
-
-The project is deliberately plain HTML, CSS, and JavaScript. The viewport is a 2D canvas with an orthographic projection:
-
-```
-X_screen = x * cos(yaw) + y * sin(yaw)
-Y_world  = -x * sin(yaw) + y * cos(yaw)
-Y_screen = -(Y_world * sin(pitch) + z * cos(pitch))
-depth    = -Y_world * cos(pitch) + z * sin(pitch)
-```
-
-Visible faces are selected by the sign of the dot product between their outward normal and the camera vector, then painted back to front. Picking reuses the same projected polygons, so clicking maps directly back to the voxel that produced the polygon. Clicking the slice plane maps the screen point back to the world XY plane at the active Z height.
-
-Theme, clipboard, and local storage fallbacks are all optional. If a browser blocks any of them, the geometry engine and downloads still work.
+- `exportAsciiSTL(mesh, name)` and `exportBinarySTL(mesh, name)` (80-byte header + uint32 facet count + 50-byte little-endian records).
+- `exportOBJ(mesh, name)` with indexed `v`, `vn`, and `f v//vn` records.
+- `exportOpenSCAD(grid, pitchMm)` merges each Z slice into maximal 2D rectangles and extrudes identical rectangles across consecutive Z layers into compact `translate(...) cube(...)` primitives inside a `union()`. For the default Desk Organizer preset, 4,128 solid voxels compress into 9 `cube()` statements.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).
