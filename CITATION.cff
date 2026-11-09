@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "VoxelSynth"
+abstract: >-
+  An offline integer lattice constructive solid geometry and signed distance
+  field CAD workstation for 3D-printable enclosures, cable combs, and PCB
+  fixtures, with watertight STL, OBJ, and OpenSCAD export.
+type: software
+license: MIT
+repository-code: "https://github.com/draarivpatel-ui/voxelsynth"
+url: "https://aariv.me/voxelsynth/"
+keywords:
+  - cad
+  - voxel
+  - sdf
+  - csg
+  - 3d-printing
+  - stl
+  - mesh
+  - javascript
+  - zero-dependency
+authors:
+  - family-names: "Patel"
+    given-names: "Aariv"
+    alias: "draarivpatel-ui"
+preferred-citation:
+  type: software
+  title: "VoxelSynth"
+  version: "1.0.0"
+  date-released: "2026-11-08"
+  license: MIT
+  url: "https://aariv.me/voxelsynth/"
+  authors:
+    - family-names: "Patel"
+      given-names: "Aariv"
+      alias: "draarivpatel-ui"
