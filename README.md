@@ -40,7 +40,7 @@ These numbers were computed from the engine's default presets on 2026-11-15. All
 | Card vault | 24 x 18 x 10 / 1.5 | 2,380 | 5,040 | 8,032.5 | 1 | 12 |
 | Cable comb | 30 x 10 x 12 / 1.5 | 2,404 | 5,552 | 8,113.5 | 2 | 26 |
 | Board fixture | 36 x 16 x 8 / 1.5 | 1,408 | 3,472 | 4,752 | 4 | 26 |
-| SDF sensor dock | 32 x 22 x 12 / 2 | 1,396 | 3,424 | 11,173 | 0 | 31 |
+| SDF sensor dock | 32 x 22 x 12 / 2 | 1,396 | 3,424 | 11,168 | 0 | 31 |
 
 The desk organizer's binary STL is exactly 426,484 bytes: an 84-byte header plus 8,528 records of 50 bytes. OpenSCAD represents its 4,128 occupied cells with nine disjoint cuboids. The measured relative volume difference after default preset mesh round trips is zero at the stored precision.
 
