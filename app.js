@@ -21,13 +21,17 @@
     sliceOnly: false,
     theme: 'light',
     faces: [],
-    sliceCells: []
+    sliceCells: [],
+    viewportWidth: 900, viewportHeight: 620, dpr: 1,
+    selected: [0, 0, 0], hover: null, inset: null,
+    undo: [], redo: [], presetName: 'deskOrganizer', verification: null, infillPercent: 100, material: 'PLA'
   };
 
   function numberInput(id, fallback) {
     var el = $(id);
     var n = Number(el.value);
-    return Number.isFinite(n) ? n : fallback;
+    if (!String(el.value).trim() || !Number.isFinite(n)) throw new RangeError(id + ' needs a finite number');
+    return n;
   }
 
   function fmt(n, digits) {
@@ -81,13 +85,14 @@
       if (q[1] > maxY) maxY = q[1];
     });
     var margin = 48;
-    var sx = (canvas.width - 2 * margin) / Math.max(1, maxX - minX);
-    var sy = (canvas.height - 2 * margin) / Math.max(1, maxY - minY);
+    var sx = Math.max(1, state.viewportWidth - 2 * margin) / Math.max(1, maxX - minX);
+    var reservedTop = state.viewportWidth < 680 ? 150 : 40;
+    var sy = Math.max(1, state.viewportHeight - reservedTop - 2 * margin) / Math.max(1, maxY - minY);
     var s = Math.min(sx, sy) * state.zoom;
     return {
       scale: s,
-      originX: (canvas.width * 0.44) - ((minX + maxX) / 2) * s,
-      originY: (canvas.height * 0.52) - ((minY + maxY) / 2) * s,
+      originX: (state.viewportWidth * 0.48) - ((minX + maxX) / 2) * s,
+      originY: (reservedTop + (state.viewportHeight - reservedTop) * 0.52) - ((minY + maxY) / 2) * s,
       center: [wMm / 2, dMm / 2, hMm / 2]
     };
   }
@@ -111,6 +116,7 @@
   }
 
   function neighbourFilled(x, y, z, def) {
+    if (state.sliceOnly && z + def.normal[2] > state.slice) return false;
     return V.getVoxel(state.grid, x + def.normal[0], y + def.normal[1], z + def.normal[2]) === 1;
   }
 
@@ -124,7 +130,7 @@
     for (var z = 0; z < g.nz; z++) {
       for (var y = 0; y < g.ny; y++) {
         for (var x = 0; x < g.nx; x++) {
-          if (!V.getVoxel(g, x, y, z) || (state.showSlice && state.sliceOnly && z > state.slice)) continue;
+          if (!V.getVoxel(g, x, y, z) || (state.sliceOnly && z > state.slice)) continue;
           for (var f = 0; f < visible.length; f++) {
             var def = visible[f];
             if (neighbourFilled(x, y, z, def)) continue;
@@ -230,9 +236,9 @@
   function drawLayerInspectorHUD(sliceColor) {
     var g = state.grid;
     var z0 = state.slice;
-    var boxW = 216;
-    var boxH = 186;
-    var x0 = canvas.width - boxW - 14;
+    var boxW = state.viewportWidth < 520 ? 154 : 202;
+    var boxH = state.viewportWidth < 520 ? 150 : 180;
+    var x0 = state.viewportWidth - boxW - 14;
     var y0 = 14;
     var panelBg = cssVar('--panel') || '#efede8';
     var borderCol = cssVar('--line-strong') || '#8d897f';
@@ -249,19 +255,20 @@
     /* Header bar in inspector inset. */
     ctx.fillStyle = sliceColor;
     ctx.fillRect(x0, y0, boxW, 22);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = cssVar('--accent-ink') || (state.theme === 'dark' ? '#23201d' : '#ffffff');
     ctx.font = 'bold 10.5px ui-monospace, monospace';
-    ctx.fillText('2D Z-SLICE INSPECTOR  [L' + (z0 + 1) + '/' + g.nz + ']', x0 + 8, y0 + 15);
+    ctx.fillText('Z LAYER ' + (z0 + 1) + '/' + g.nz + ' / XY', x0 + 8, y0 + 15);
 
     var padX = 12;
     var availW = boxW - 2 * padX;
     var availH = boxH - 52;
-    var cellPx = Math.max(2, Math.floor(Math.min(availW / g.nx, availH / g.ny)));
+    var cellPx = Math.min(availW / g.nx, availH / g.ny);
     var gridW = cellPx * g.nx;
     var gridH = cellPx * g.ny;
     var gx0 = x0 + Math.floor((boxW - gridW) / 2);
     var gy0 = y0 + 28 + Math.floor((availH - gridH) / 2);
 
+    state.inset = { x: x0, y: y0, width: boxW, height: boxH, gx: gx0, gy: gy0, cell: cellPx, gridWidth: gridW, gridHeight: gridH };
     var solidOnSlice = 0;
     for (var yy = 0; yy < g.ny; yy++) {
       for (var xx = 0; xx < g.nx; xx++) {
@@ -271,10 +278,14 @@
         if (filled) {
           solidOnSlice++;
           ctx.fillStyle = sliceColor;
-          ctx.fillRect(cx, cy, cellPx - 1, cellPx - 1);
+          ctx.fillRect(cx, cy, Math.max(0.5, cellPx - 0.6), Math.max(0.5, cellPx - 0.6));
         } else {
           ctx.fillStyle = state.theme === 'dark' ? '#141619' : '#dcd8cf';
-          ctx.fillRect(cx, cy, cellPx - 1, cellPx - 1);
+          ctx.fillRect(cx, cy, Math.max(0.5, cellPx - 0.6), Math.max(0.5, cellPx - 0.6));
+        }
+        if ((state.selected[0] === xx && state.selected[1] === yy && state.selected[2] === z0) ||
+            (state.hover && state.hover.voxel && state.hover.voxel[0] === xx && state.hover.voxel[1] === yy && state.hover.voxel[2] === z0)) {
+          ctx.strokeStyle = inkCol; ctx.lineWidth = 1.8; ctx.strokeRect(cx, cy, cellPx, cellPx);
         }
       }
     }
@@ -288,6 +299,7 @@
   }
 
   function drawTelemetryHeader() {
+    if (state.viewportWidth < 680) return;
     var g = state.grid;
     var inkCol = cssVar('--ink') || '#1b1d20';
     var softCol = cssVar('--ink-soft') || '#565a60';
@@ -313,8 +325,23 @@
     ctx.restore();
   }
 
+  function syncCanvas() {
+    var rect = canvas.getBoundingClientRect();
+    state.viewportWidth = Math.max(1, rect.width || 900);
+    state.viewportHeight = Math.max(1, rect.height || 620);
+    state.dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    var width = Math.round(state.viewportWidth * state.dpr);
+    var height = Math.round(state.viewportHeight * state.dpr);
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+  }
+
+  function sameCell(a, b) { return a && b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2]; }
+
   function render() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!state.grid) return;
+    syncCanvas();
+    ctx.clearRect(0, 0, state.viewportWidth, state.viewportHeight);
     var fit = buildFaces();
     var v = view();
     var base = cssVar('--voxel-a') || '#647382';
@@ -327,17 +354,20 @@
       var face = state.faces[i];
       var pts = face.pts.map(function (q) { return [q[0], q[1]]; });
       var fill = state.wireframe ? null : shadeColor(base, face.shade);
-      drawPolygon(pts, fill, state.wireframe ? base : edge, state.wireframe ? 1.0 : 0.65);
+      drawPolygon(pts, fill, state.wireframe ? base : edge, state.wireframe ? 1.0 : 0.35);
+      if (sameCell(face.voxel, state.hover && state.hover.voxel) || sameCell(face.voxel, state.selected)) {
+        ctx.globalAlpha = 0.65; drawPolygon(pts, sliceColor, cssVar('--ink'), 1.5); ctx.globalAlpha = 1;
+      }
     }
 
     if (state.showSlice) {
       for (var j = 0; j < state.sliceCells.length; j++) {
         var cell = state.sliceCells[j];
         var poly = cell.pts.map(function (q) { return [q[0], q[1]]; });
-        ctx.globalAlpha = cell.filled ? 0.34 : 0.08;
+        ctx.globalAlpha = cell.filled ? 0.18 : 0.025;
         drawPolygon(poly, sliceColor, null);
-        ctx.globalAlpha = 0.88;
-        drawPolygon(poly, null, sliceColor, cell.filled ? 1.4 : 0.55);
+        ctx.globalAlpha = 0.45;
+        drawPolygon(poly, null, sliceColor, cell.filled ? 0.8 : 0.35);
         ctx.globalAlpha = 1;
       }
     }
@@ -372,7 +402,7 @@
 
     /* Fixed bottom-left HUD triad. */
     var hudX = 52;
-    var hudY = canvas.height - 54;
+    var hudY = state.viewportHeight - 54;
     var hudLen = 28;
     var o0 = project([0, 0, 0], v, 0, 0, 1);
     axes.forEach(function (axis) {
@@ -413,19 +443,28 @@
   function canvasPoint(evt) {
     var rect = canvas.getBoundingClientRect();
     return [
-      (evt.clientX - rect.left) * canvas.width / rect.width,
-      (evt.clientY - rect.top) * canvas.height / rect.height
+      (evt.clientX - rect.left) * state.viewportWidth / Math.max(1, rect.width),
+      (evt.clientY - rect.top) * state.viewportHeight / Math.max(1, rect.height)
     ];
   }
 
   function pickVoxel(px, py) {
+    var inset = state.inset;
+    if (inset && px >= inset.x && py >= inset.y && px < inset.x + inset.width && py < inset.y + inset.height) {
+      var x = Math.floor((px - inset.gx) / inset.cell);
+      var y = state.grid.ny - 1 - Math.floor((py - inset.gy) / inset.cell);
+      if (px >= inset.gx && py >= inset.gy && px < inset.gx + inset.gridWidth && py < inset.gy + inset.gridHeight && V.inBounds(state.grid, x, y, state.slice)) {
+        return { voxel: [x, y, state.slice], remove: !!V.getVoxel(state.grid, x, y, state.slice), source: 'Layer inset' };
+      }
+      return { blocked: true };
+    }
     for (var j = state.sliceCells.length - 1; j >= 0; j--) {
       var cell = state.sliceCells[j];
-      if (pointInPolygon(px, py, cell.pts)) return { voxel: cell.voxel, remove: cell.filled };
+      if (pointInPolygon(px, py, cell.pts)) return { voxel: cell.voxel, remove: cell.filled, source: 'Layer plane' };
     }
     for (var i = state.faces.length - 1; i >= 0; i--) {
       var face = state.faces[i];
-      if (pointInPolygon(px, py, face.pts)) return { voxel: face.voxel, remove: true };
+      if (pointInPolygon(px, py, face.pts)) return { voxel: face.voxel, remove: true, source: 'Surface ' + ['X', 'Y', 'Z'][face.def.axis] + (face.def.sign > 0 ? '+' : '-') };
     }
     return null;
   }
@@ -434,17 +473,19 @@
   /* Diagnostics and exports                                          */
   /* ---------------------------------------------------------------- */
 
-  function recompute() {
-    var infill = numberInput('infill', 100);
-    state.mesh = V.extractManifoldMesh(state.grid, { infillPercent: infill });
+  function recompute(preparedMesh) {
+    var infill = state.infillPercent;
+    state.mesh = preparedMesh || V.extractManifoldMesh(state.grid, { infillPercent: infill });
     updateDiagnostics();
     render();
     updateChips();
+    updateInspector();
+    updateHistoryButtons();
   }
 
   function updateDiagnostics() {
     var s = state.mesh.stats;
-    var material = $('material').value;
+    var material = state.material;
     var mass = V.estimateMass(state.mesh, {
       material: material,
       infillPercent: s.infillPercent
@@ -455,28 +496,44 @@
       ['Naive triangles', fmt(s.naiveTriangleCount, 0)],
       ['Greedy quads', fmt(s.quadCount, 0)],
       ['Output triangles', fmt(s.triangleCount, 0)],
-      ['Merge ratio', fmt(s.mergeRatio, 2) + ' x'],
+      ['Culling ratio', fmt(s.mergeRatio, 2) + ' x'],
       ['Surface area', fmt(s.surfaceAreaMm2, 1) + ' mm2'],
       ['Enclosed volume', fmt(s.volumeCm3, 2) + ' cm3'],
       ['Bounds (X/Y/Z)', s.boundingBoxMm.size.map(function (n) { return fmt(n, 1); }).join(' / ') + ' mm'],
       ['Euler (V - E + F)', fmt(s.eulerCharacteristic, 0)],
-      ['Genus estimate', fmt(s.genusEstimate, 1)],
+      ['Surface components', fmt(s.surfaceComponents, 0)],
+      ['Total genus', s.genusEstimate === null ? 'n/a' : fmt(s.genusEstimate, 0)],
       ['Vertices', fmt(s.uniqueVertices, 0)],
       ['Edges', fmt(s.uniqueEdges, 0)],
       ['Watertight', s.watertight ? 'Yes' : 'No'],
-      ['Unmatched edges', fmt(s.unmatchedEdges, 0)],
+      ['Boundary edges', fmt(s.boundaryEdges, 0)],
+      ['Edge contacts', fmt(s.nonManifoldEdges, 0)],
+      ['Invalid vertex links', fmt(s.nonManifoldVertices, 0)],
+      ['Winding errors', fmt(s.windingErrors, 0)],
+      ['Volume error', fmt(s.volumeErrorMm3, 8) + ' mm3'],
       ['Infill', fmt(s.infillPercent, 0) + ' %'],
       [material + ' mass', fmt(mass.grams, 2) + ' g']
     ];
-    $('diag-body').innerHTML = rows.map(function (r) {
-      return '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>';
-    }).join('');
+    var body = $('diag-body');
+    body.textContent = '';
+    rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      row.forEach(function (value) { var td = document.createElement('td'); td.textContent = value; tr.appendChild(td); });
+      body.appendChild(tr);
+    });
+    $('metric-volume').textContent = fmt(s.volumeCm3, 2) + ' cm3';
+    $('metric-triangles').textContent = fmt(s.triangleCount, 0);
+    $('metric-topology').textContent = s.watertight ? 'Verified' : s.triangleCount ? 'Check contacts' : 'Empty';
+    document.querySelectorAll('[data-export], [data-copy]').forEach(function (button) {
+      button.disabled = (button.dataset.export || button.dataset.copy) !== 'json' && !s.watertight;
+    });
+    $('verify-exports').disabled = !s.watertight;
     var badge = $('health-badge');
     if (s.watertight) {
-      badge.textContent = 'MANIFOLD PASS: 0 unmatched half-edges.';
+      badge.textContent = 'MANIFOLD PASS / paired edges + cyclic vertex links';
       badge.className = 'health';
     } else {
-      badge.textContent = s.triangleCount ? 'OPEN MESH: Check unmatched half-edges.' : 'EMPTY LATTICE: Add a CSG primitive.';
+      badge.textContent = s.triangleCount ? 'CONTACT DETECTED / inspect edge and vertex links' : 'EMPTY LATTICE: Add a CSG primitive.';
       badge.className = 'health bad';
     }
   }
@@ -486,9 +543,14 @@
     $('slice-chip').textContent = 'Z layer ' + (state.slice + 1) + ' / ' + state.grid.nz +
       (state.sliceOnly ? ' (slice only)' : '');
     $('slice').max = String(state.grid.nz - 1);
+    $('slice').value = String(state.slice);
     $('slice-out').textContent = String(state.slice + 1);
-    $('yaw-out').textContent = state.yawDeg + ' deg';
-    $('pitch-out').textContent = state.pitchDeg + ' deg';
+    $('yaw-out').textContent = fmt(state.yawDeg, 0) + ' deg';
+    $('pitch-out').textContent = fmt(state.pitchDeg, 0) + ' deg';
+    var hint = state.primitive === 'box' ? 'Box origin and dimensions are measured in cells.' :
+      state.primitive === 'cylinder' ? 'X/Y are the center, Z is the base. Radius and height are in cells.' :
+      'X/Y/Z are the sphere center. Radius is measured in cells.';
+    $('primitive-hint').textContent = hint;
   }
 
   function exportedText(kind) {
@@ -522,250 +584,389 @@
   }
 
   function safeName() {
-    return ($('export-name').value || 'voxelsynth_model').replace(/[^A-Za-z0-9_.-]+/g, '_');
+    var name = String($('export-name').value || 'voxelsynth_model').trim().replace(/[^A-Za-z0-9_.-]+/g, '_');
+    return name.replace(/^[_.]+|[_.]+$/g, '').slice(0, 80) || 'voxelsynth_model';
+  }
+
+  function requireGeometry() {
+    if (!state.mesh.stats.watertight) throw new RangeError('Part exports need a nonempty manifold. Resolve edge or point contacts first.');
+  }
+
+  function verifyPayload(kind, payload) {
+    if (kind === 'json') { V.deserializeGrid(JSON.parse(payload)); return; }
+    requireGeometry();
+    if (kind === 'scad') {
+      var grid = V.parseOpenSCAD(payload);
+      if (grid.data.some(function (v, i) { return v !== (state.grid.data[i] ? 1 : 0); })) throw new Error('OpenSCAD occupancy did not round trip');
+      return;
+    }
+    var parsed = kind === 'binary-stl' ? V.parseBinarySTL(payload) :
+      kind === 'obj' ? V.parseOBJ(payload) : V.parseAsciiSTL(payload);
+    var stats = V.analyzeMesh(parsed), original = state.mesh.stats;
+    if (!stats.watertight || stats.triangleCount !== original.triangleCount ||
+        Math.abs(stats.volumeMm3 - original.volumeMm3) / original.volumeMm3 > 1e-5) {
+      throw new Error('Export geometry did not round trip');
+    }
   }
 
   function handleExport(kind) {
     var base = safeName();
     if (kind === 'binary-stl') {
+      requireGeometry();
       var bytes = V.exportBinarySTL(state.mesh, base);
+      verifyPayload(kind, bytes);
       downloadBlob(new Blob([bytes], { type: 'model/stl' }), base + '.stl');
-      showToast('Binary STL downloaded. ' + state.mesh.triangles.length + ' facets.');
+      showToast('Binary STL verified and downloaded. ' + state.mesh.triangles.length + ' facets.');
       return;
     }
+    if (kind !== 'json') requireGeometry();
     var payload = exportedText(kind);
-    if (!payload) return;
+    if (!payload) throw new RangeError('Unknown export format');
+    verifyPayload(kind, payload.text);
     downloadBlob(new Blob([payload.text], { type: payload.mime }), base + '.' + payload.ext);
-    showToast(payload.ext.toUpperCase() + ' downloaded.');
+    showToast(payload.ext.toUpperCase() + ' verified and downloaded.');
   }
 
   function handleCopy(kind) {
+    if (kind !== 'json') requireGeometry();
     var payload = exportedText(kind);
-    if (!payload) return;
+    if (!payload) throw new RangeError('Unknown copy format');
+    verifyPayload(kind, payload.text);
     var done = function () { showToast(payload.ext.toUpperCase() + ' copied to clipboard.'); };
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(payload.text).then(done, function () { legacyCopy(payload.text, done); });
-    } else {
-      legacyCopy(payload.text, done);
+      return navigator.clipboard.writeText(payload.text).then(done, function () { legacyCopy(payload.text, done); });
     }
+    legacyCopy(payload.text, done);
   }
 
   function legacyCopy(text, done) {
     var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); done(); }
-    catch (err) { showToast('Clipboard unavailable. Use the download button instead.'); }
-    ta.remove();
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try {
+      if (document.execCommand('copy') !== true) throw new Error('Clipboard unavailable. Download the file instead.');
+      done();
+    } finally { ta.remove(); }
   }
 
-  /* ---------------------------------------------------------------- */
-  /* Actions                                                          */
-  /* ---------------------------------------------------------------- */
+  function protectedAction(fn) {
+    function report(error) {
+      if (error && error.name === 'ReferenceError') { console.error(error); throw error; }
+      showToast(error.message);
+    }
+    return function () {
+      try {
+        var result = fn.apply(this, arguments);
+        if (result && typeof result.then === 'function') return result.catch(report);
+        return result;
+      } catch (error) { report(error); }
+    };
+  }
 
-  function loadPreset(name) {
-    var nx = Math.round(numberInput('grid-nx', 24));
-    var ny = Math.round(numberInput('grid-ny', 18));
-    var nz = Math.round(numberInput('grid-nz', 12));
-    var pitch = numberInput('grid-pitch', 2);
-    state.grid = V.loadPreset(name, {
-      nx: Math.max(4, Math.min(48, nx)),
-      ny: Math.max(4, Math.min(48, ny)),
-      nz: Math.max(2, Math.min(32, nz)),
-      pitchMm: Math.max(0.5, Math.min(10, pitch))
+  function on(id, event, handler, options) { $(id).addEventListener(event, protectedAction(handler), options); }
+
+  function editorGrid(grid) {
+    if (grid.nx > 48 || grid.ny > 48 || grid.nz > 32) throw new RangeError('Editor supports at most 48 x 48 x 32 cells.');
+    return grid;
+  }
+
+  function readLattice() {
+    return editorGrid(V.createGrid(numberInput('grid-nx'), numberInput('grid-ny'), numberInput('grid-nz'), numberInput('grid-pitch')));
+  }
+
+  function syncLatticeInputs() {
+    ['nx', 'ny', 'nz'].forEach(function (axis) { $('grid-' + axis).value = String(state.grid[axis]); });
+    $('grid-pitch').value = String(state.grid.pitchMm);
+  }
+
+  function snapshot() {
+    return { grid: V.cloneGrid(state.grid), slice: state.slice, selected: state.selected.slice(), presetName: state.presetName };
+  }
+
+  function invalidateVerification() {
+    state.verification = null;
+    $('verification-result').textContent = 'Geometry changed. Run a self-check for this revision.';
+    $('verification-result').className = 'verification-result';
+  }
+
+  function updateHistoryButtons() {
+    $('undo').disabled = state.undo.length === 0;
+    $('redo').disabled = state.redo.length === 0;
+    document.querySelectorAll('[data-showcase]').forEach(function (button) {
+      var active = button.dataset.showcase === state.presetName;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
     });
-    state.slice = 0;
-    $('slice').value = '0';
-    recompute();
-    showToast('Loaded ' + name + '.');
+  }
+
+  function changeGrid(action, message, presetName) {
+    var before = snapshot();
+    var next = editorGrid(action(V.cloneGrid(state.grid)));
+    var unchanged = next.nx === state.grid.nx && next.ny === state.grid.ny && next.nz === state.grid.nz && next.pitchMm === state.grid.pitchMm &&
+      next.data.every(function (value, i) { return value === state.grid.data[i]; });
+    if (!unchanged) {
+      var preparedMesh = V.extractManifoldMesh(next, { infillPercent: state.infillPercent });
+      state.undo.push(before);
+      if (state.undo.length > 32) state.undo.shift();
+      state.redo = [];
+      state.grid = next;
+      state.presetName = presetName || null;
+      state.slice = Math.min(state.slice, next.nz - 1);
+      clearHover();
+      invalidateVerification();
+      syncLatticeInputs();
+      recompute(preparedMesh);
+    } else { updateHistoryButtons(); }
+    showToast(unchanged ? 'No geometry changed. Check the primitive position and dimensions.' : message);
+  }
+
+  function restoreSnapshot(saved) {
+    state.grid = saved.grid; state.slice = saved.slice; state.selected = saved.selected; state.presetName = saved.presetName;
+    clearHover(); invalidateVerification(); syncLatticeInputs(); recompute();
+  }
+
+  function undo() {
+    if (!state.undo.length) return;
+    state.redo.push(snapshot()); restoreSnapshot(state.undo.pop()); showToast('Previous geometry restored.');
+  }
+
+  function redo() {
+    if (!state.redo.length) return;
+    state.undo.push(snapshot()); restoreSnapshot(state.redo.pop()); showToast('Geometry change restored.');
+  }
+
+  function loadPreset(name, showcase) {
+    var options;
+    if (!showcase) {
+      var lattice = readLattice();
+      if (lattice.nx < 4 || lattice.ny < 4 || lattice.nz < 4) throw new RangeError('Part recipes need at least 4 cells on each axis.');
+      options = { nx: lattice.nx, ny: lattice.ny, nz: lattice.nz, pitchMm: lattice.pitchMm };
+    }
+    changeGrid(function () { return V.loadPreset(name, options); }, 'Loaded ' + name + '. Every cell is editable.', name);
+    state.presetName = name;
+    $('preset-select').value = name;
+    state.slice = Math.floor(state.grid.nz / 2);
+    state.selected[2] = state.slice;
+    state.zoom = 1;
+    setView(35, 28);
+    updateInspector(); updateHistoryButtons();
   }
 
   function applyPrimitive() {
     var p = state.grid.pitchMm;
-    var cx = numberInput('prim-x', 6) * p;
-    var cy = numberInput('prim-y', 6) * p;
-    var cz = numberInput('prim-z', 4) * p;
-    var w = numberInput('prim-w', 10) * p;
-    var d = numberInput('prim-d', 10) * p;
-    var r = numberInput('prim-r', 8) * p;
-    var h = numberInput('prim-h', 8) * p;
-    var g = state.grid;
-    var op = state.operation;
-    if (state.primitive === 'box') {
-      if (op === 'add') V.addBox(g, cx, cy, cz, w, d, h);
-      else V.subtractBox(g, cx, cy, cz, w, d, h);
-    } else if (state.primitive === 'cylinder') {
-      if (op === 'add') V.addCylinder(g, cx, cy, cz, r, h, 'z');
-      else V.subtractCylinder(g, cx, cy, cz, r, h, 'z');
-    } else {
-      if (op === 'add') V.addSphere(g, cx, cy, cz, r);
-      else V.subtractSphere(g, cx, cy, cz, r);
-    }
-    recompute();
-    showToast(state.primitive + ' ' + op + ' applied.');
+    var x = numberInput('prim-x') * p, y = numberInput('prim-y') * p, z = numberInput('prim-z') * p;
+    var w, d, r, h;
+    if (state.primitive === 'box') { w = numberInput('prim-w') * p; d = numberInput('prim-d') * p; h = numberInput('prim-h') * p; }
+    if (state.primitive !== 'box') r = numberInput('prim-r') * p;
+    if (state.primitive === 'cylinder') h = numberInput('prim-h') * p;
+    var prefix = state.operation === 'add' ? 'add' : 'subtract';
+    changeGrid(function (grid) {
+      if (state.primitive === 'box') return V[prefix + 'Box'](grid, x, y, z, w, d, h);
+      if (state.primitive === 'cylinder') return V[prefix + 'Cylinder'](grid, x, y, z, r, h, 'z');
+      return V[prefix + 'Sphere'](grid, x, y, z, r);
+    }, state.primitive + ' ' + state.operation + ' applied.');
   }
 
   function setSegment(group, value) {
-    var buttons = document.querySelectorAll(group);
-    buttons.forEach(function (b) {
-      var on = b.dataset.op === value || b.dataset.prim === value;
-      b.classList.toggle('active', on);
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    document.querySelectorAll(group).forEach(function (button) {
+      var active = button.dataset.op === value || button.dataset.prim === value;
+      button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
     });
   }
 
   function setTheme(theme) {
     state.theme = theme;
     document.documentElement.setAttribute('data-theme', theme);
-    $('theme-toggle').textContent = theme === 'dark' ? 'Light sheet' : 'Dark sheet';
-    try { localStorage.setItem('voxelsynth-theme', theme); } catch (err) { /* storage may be blocked */ }
+    $('theme-toggle').textContent = theme === 'dark' ? 'Light theme' : 'Dark theme';
+    try { localStorage.setItem('voxelsynth-theme', theme); } catch (error) { /* Theme still works without storage. */ }
     render();
   }
 
   function setView(yaw, pitch) {
-    state.yawDeg = yaw;
-    state.pitchDeg = pitch;
-    $('yaw').value = String(yaw);
-    $('pitch').value = String(pitch);
-    updateChips();
-    render();
+    clearHover();
+    state.yawDeg = Math.max(-180, Math.min(180, yaw));
+    state.pitchDeg = Math.max(-80, Math.min(90, pitch));
+    $('yaw').value = String(state.yawDeg); $('pitch').value = String(state.pitchDeg);
+    updateChips(); render();
+  }
+
+  function cellText(cell) {
+    var center = cell.map(function (n) { return fmt((n + 0.5) * state.grid.pitchMm, 6); }).join(', ');
+    return 'Cell ' + cell.join(', ') + ' / center [' + center + '] mm / ' + (V.getVoxel(state.grid, cell[0], cell[1], cell[2]) ? 'solid' : 'air');
+  }
+
+  function clearHover() {
+    state.hover = null;
+    $('hover-readout').textContent = 'Hover over a face or the inset to inspect its coordinates.';
+  }
+
+  function updateInspector() {
+    var limits = [state.grid.nx, state.grid.ny, state.grid.nz];
+    ['x', 'y', 'z'].forEach(function (axis, i) {
+      state.selected[i] = Math.max(0, Math.min(limits[i] - 1, Math.round(state.selected[i])));
+      $('inspect-' + axis).value = String(state.selected[i]); $('inspect-' + axis).max = String(limits[i] - 1);
+    });
+    $('inspect-readout').textContent = cellText(state.selected);
+  }
+
+  function setSlice(value) {
+    state.slice = Math.max(0, Math.min(state.grid.nz - 1, Math.round(value)));
+    state.selected[2] = state.slice; $('slice').value = String(state.slice);
+    clearHover(); updateChips(); updateInspector(); render();
+  }
+
+  function toggleSelected() {
+    var cell = state.selected.slice();
+    changeGrid(function (grid) { V.setVoxel(grid, cell[0], cell[1], cell[2], !V.getVoxel(grid, cell[0], cell[1], cell[2])); return grid; }, 'Cell ' + cell.join(', ') + ' toggled.');
+  }
+
+  function importText(text) {
+    if (typeof text !== 'string' || text.length > 1000000) throw new RangeError('Project text must be smaller than 1 MB.');
+    var next = editorGrid(V.deserializeGrid(JSON.parse(text)));
+    changeGrid(function () { return next; }, 'Project restored with exact cell occupancy.');
   }
 
   function bindEvents() {
-    $('load-preset').addEventListener('click', function () { loadPreset($('preset-select').value); });
-    $('preset-select').addEventListener('change', function () { loadPreset(this.value); });
-    $('reset-grid').addEventListener('click', function () {
-      state.grid = V.createGrid(
-        Math.round(numberInput('grid-nx', 24)),
-        Math.round(numberInput('grid-ny', 18)),
-        Math.round(numberInput('grid-nz', 12)),
-        numberInput('grid-pitch', 2)
-      );
-      $('slice').value = '0';
-      state.slice = 0;
-      recompute();
-      showToast('Grid reset.');
+    on('load-preset', 'click', function () { loadPreset($('preset-select').value, false); });
+    on('preset-select', 'change', function () { loadPreset(this.value, false); });
+    document.querySelectorAll('[data-showcase]').forEach(function (button) {
+      button.addEventListener('click', protectedAction(function () { loadPreset(button.dataset.showcase, true); }));
     });
-    $('apply-grid').addEventListener('click', function () { $('reset-grid').click(); });
-    $('apply-primitive').addEventListener('click', applyPrimitive);
-
-    document.querySelectorAll('[data-op]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        state.operation = b.dataset.op;
-        setSegment('[data-op]', state.operation);
-        updateChips();
+    on('reset-grid', 'click', function () {
+      changeGrid(function (grid) { grid.data.fill(0); return grid; }, 'Part cleared. The lattice dimensions are preserved.');
+    });
+    on('apply-grid', 'click', function () { changeGrid(function () { return readLattice(); }, 'New empty lattice created.'); });
+    on('apply-primitive', 'click', applyPrimitive);
+    on('undo', 'click', undo); on('redo', 'click', redo);
+    document.querySelectorAll('[data-op]').forEach(function (button) {
+      button.addEventListener('click', function () { state.operation = button.dataset.op; setSegment('[data-op]', state.operation); updateChips(); });
+    });
+    document.querySelectorAll('[data-prim]').forEach(function (button) {
+      button.addEventListener('click', function () { state.primitive = button.dataset.prim; setSegment('[data-prim]', state.primitive); updateChips(); });
+    });
+    on('mirror-x', 'click', function () { changeGrid(function (grid) { return V.mirrorGrid(grid, 'x'); }, 'Mirrored across X.'); });
+    on('mirror-y', 'click', function () { changeGrid(function (grid) { return V.mirrorGrid(grid, 'y'); }, 'Mirrored across Y.'); });
+    on('apply-shell', 'click', function () {
+      var wall = numberInput('shell-wall');
+      changeGrid(function (grid) { return V.shellGrid(grid, wall); }, 'Shell created with wall rounded up to complete cell layers.');
+    });
+    on('infill', 'input', function () { state.infillPercent = Math.max(0, Math.min(100, numberInput('infill'))); recompute(); });
+    on('material', 'change', function () {
+      if (this.value !== 'PLA' && this.value !== 'PETG') throw new RangeError('Choose PLA or PETG.');
+      state.material = this.value; updateDiagnostics();
+    });
+    on('theme-toggle', 'click', function () { setTheme(state.theme === 'dark' ? 'light' : 'dark'); });
+    on('help-toggle', 'click', function () {
+      var panel = $('help-panel'); panel.hidden = !panel.hidden; this.setAttribute('aria-expanded', String(!panel.hidden));
+    });
+    on('yaw', 'input', function () { setView(numberInput('yaw'), state.pitchDeg); });
+    on('pitch', 'input', function () { setView(state.yawDeg, numberInput('pitch')); });
+    on('slice', 'input', function () { setSlice(numberInput('slice')); });
+    on('view-top', 'click', function () { setView(0, 90); });
+    on('view-front', 'click', function () { setView(0, 0); });
+    on('view-iso', 'click', function () { state.zoom = 1; setView(35, 28); });
+    on('toggle-wire', 'click', function () { state.wireframe = !state.wireframe; this.setAttribute('aria-pressed', String(state.wireframe)); render(); });
+    on('toggle-slice', 'click', function () { state.showSlice = !state.showSlice; this.setAttribute('aria-pressed', String(state.showSlice)); render(); });
+    on('cycle-slice-mode', 'click', function () {
+      state.sliceOnly = !state.sliceOnly; this.setAttribute('aria-pressed', String(state.sliceOnly));
+      this.textContent = state.sliceOnly ? 'Show full part' : 'Clip above layer'; updateChips(); render();
+    });
+    ['x', 'y', 'z'].forEach(function (axis, i) {
+      on('inspect-' + axis, 'change', function () {
+        var value = numberInput('inspect-' + axis);
+        if (!Number.isInteger(value)) throw new RangeError('Inspector coordinates must be whole cells.');
+        state.selected[i] = value; updateInspector();
+        if (i === 2) state.slice = state.selected[2];
+        updateChips(); render();
       });
     });
-    document.querySelectorAll('[data-prim]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        state.primitive = b.dataset.prim;
-        setSegment('[data-prim]', state.primitive);
-        updateChips();
-      });
+    on('toggle-voxel', 'click', toggleSelected);
+    on('verify-exports', 'click', function () {
+      state.verification = V.verifyExports(state.grid);
+      $('verification-result').textContent = '4 formats passed + project occupancy. Maximum relative volume error: ' + state.verification.maxRelativeVolumeError.toExponential(2) + '.';
+      $('verification-result').className = 'verification-result good';
+      showToast('Round trip passed for STL, Binary STL, OBJ, OpenSCAD and project JSON.');
     });
-
-    $('mirror-x').addEventListener('click', function () { V.mirrorGrid(state.grid, 'x'); recompute(); showToast('Mirrored along X.'); });
-    $('mirror-y').addEventListener('click', function () { V.mirrorGrid(state.grid, 'y'); recompute(); showToast('Mirrored along Y.'); });
-    $('apply-shell').addEventListener('click', function () {
-      V.shellGrid(state.grid, numberInput('shell-wall', 3));
-      recompute();
-      showToast('Shell applied.');
+    document.querySelectorAll('[data-export]').forEach(function (button) {
+      button.addEventListener('click', protectedAction(function () { handleExport(button.dataset.export); }));
     });
-
-    $('infill').addEventListener('input', recompute);
-    $('material').addEventListener('change', recompute);
-    $('theme-toggle').addEventListener('click', function () {
-      setTheme(state.theme === 'dark' ? 'light' : 'dark');
+    document.querySelectorAll('[data-copy]').forEach(function (button) {
+      button.addEventListener('click', protectedAction(function () { return handleCopy(button.dataset.copy); }));
     });
-    $('help-toggle').addEventListener('click', function () {
-      var panel = $('help-panel');
-      panel.hidden = !panel.hidden;
-      this.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
-    });
-
-    $('yaw').addEventListener('input', function () { state.yawDeg = Number(this.value); updateChips(); render(); });
-    $('pitch').addEventListener('input', function () { state.pitchDeg = Number(this.value); updateChips(); render(); });
-    $('slice').addEventListener('input', function () { state.slice = Number(this.value); updateChips(); render(); });
-    $('view-top').addEventListener('click', function () { setView(0, 89); });
-    $('view-front').addEventListener('click', function () { setView(0, 2); });
-    $('view-iso').addEventListener('click', function () { setView(35, 28); });
-    $('toggle-wire').addEventListener('click', function () {
-      state.wireframe = !state.wireframe;
-      this.setAttribute('aria-pressed', String(state.wireframe));
-      this.classList.toggle('btn-primary', state.wireframe);
-      render();
-    });
-    $('toggle-slice').addEventListener('click', function () {
-      state.showSlice = !state.showSlice;
-      this.setAttribute('aria-pressed', String(state.showSlice));
-      this.classList.toggle('btn-primary', state.showSlice);
-      render();
-    });
-    $('cycle-slice-mode').addEventListener('click', function () {
-      state.sliceOnly = !state.sliceOnly;
-      this.textContent = state.sliceOnly ? 'Show full model' : 'Slice only';
-      this.setAttribute('aria-pressed', String(state.sliceOnly));
-      updateChips();
-      render();
-    });
-
-    document.querySelectorAll('[data-export]').forEach(function (b) {
-      b.addEventListener('click', function () { handleExport(b.dataset.export); });
-    });
-    document.querySelectorAll('[data-copy]').forEach(function (b) {
-      b.addEventListener('click', function () { handleCopy(b.dataset.copy); });
+    on('open-project', 'click', function () { $('import-project').click(); });
+    on('import-project', 'change', async function () {
+      var file = this.files && this.files[0];
+      if (!file) return;
+      try {
+        if (file.size > 1000000) throw new RangeError('Project file must be smaller than 1 MB.');
+        importText(await file.text());
+      } finally { this.value = ''; }
     });
 
     var drag = null;
-    canvas.addEventListener('pointerdown', function (evt) {
-      drag = { x: evt.clientX, y: evt.clientY, yaw: state.yawDeg, pitch: state.pitchDeg, moved: false };
-      canvas.setPointerCapture(evt.pointerId);
+    on('viewport', 'pointerdown', function (event) {
+      if (drag) return;
+      if (event.button !== undefined && event.button !== 0) return;
+      clearHover();
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, yaw: state.yawDeg, pitch: state.pitchDeg, moved: false };
+      canvas.focus({ preventScroll: true }); canvas.setPointerCapture(event.pointerId);
     });
-    canvas.addEventListener('pointermove', function (evt) {
-      if (!drag) return;
-      var dx = evt.clientX - drag.x, dy = evt.clientY - drag.y;
-      if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
-      if (drag.moved) {
-        state.yawDeg = Math.max(-180, Math.min(180, drag.yaw + dx * 0.4));
-        state.pitchDeg = Math.max(-80, Math.min(80, drag.pitch + dy * 0.3));
-        $('yaw').value = String(Math.round(state.yawDeg));
-        $('pitch').value = String(Math.round(state.pitchDeg));
-        updateChips();
-        render();
+    on('viewport', 'pointermove', function (event) {
+      if (drag) {
+        if (drag.id !== event.pointerId) return;
+        var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+        if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+        if (drag.moved) setView(drag.yaw + dx * 0.4, drag.pitch + dy * 0.3);
+        return;
       }
+      var point = canvasPoint(event), hit = pickVoxel(point[0], point[1]);
+      state.hover = hit && hit.voxel ? hit : null;
+      $('hover-readout').textContent = state.hover ? state.hover.source + ' / ' + cellText(state.hover.voxel) : 'Hover over a face or the inset to inspect its coordinates.';
+      render();
     });
-    canvas.addEventListener('pointerup', function (evt) {
-      if (drag && !drag.moved) {
-        var pt = canvasPoint(evt);
-        var hit = pickVoxel(pt[0], pt[1]);
-        if (hit) {
-          var cell = hit.voxel;
-          V.setVoxel(state.grid, cell[0], cell[1], cell[2], hit.remove ? 0 : 1);
-          recompute();
-          showToast('Voxel ' + cell.join(',') + (hit.remove ? ' cleared.' : ' added.'));
-        }
+    on('viewport', 'pointerup', function (event) {
+      if (!drag || drag.id !== event.pointerId) return;
+      if (!drag.moved) {
+        var point = canvasPoint(event), hit = pickVoxel(point[0], point[1]);
+        if (hit && hit.voxel) { state.selected = hit.voxel.slice(); state.slice = hit.voxel[2]; toggleSelected(); }
       }
       drag = null;
+      if (canvas.hasPointerCapture && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
     });
-    canvas.addEventListener('wheel', function (evt) {
-      evt.preventDefault();
-      state.zoom = Math.max(0.4, Math.min(3, state.zoom * (evt.deltaY > 0 ? 0.92 : 1.08)));
-      render();
+    on('viewport', 'pointercancel', function (event) { if (drag && drag.id === event.pointerId) drag = null; });
+    on('viewport', 'lostpointercapture', function (event) { if (drag && drag.id === event.pointerId) drag = null; });
+    on('viewport', 'pointerleave', function () { if (!drag) { clearHover(); render(); } });
+    on('viewport', 'wheel', function (event) {
+      event.preventDefault();
+      if (event.deltaY === 0) return;
+      state.zoom = Math.max(0.4, Math.min(3, state.zoom * (event.deltaY > 0 ? 0.92 : 1.08))); render();
     }, { passive: false });
 
-    document.addEventListener('keydown', function (evt) {
-      var tag = (evt.target.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
-      var key = evt.key;
+    document.addEventListener('keydown', protectedAction(function (event) {
+      var target = event.target || {}, tag = (target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'select' || tag === 'textarea' || target.isContentEditable) return;
+      var key = event.key;
+      if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === 'z' && !event.altKey) {
+        event.preventDefault(); if (event.shiftKey) redo(); else undo(); return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (target === canvas && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'Enter'].indexOf(key) >= 0) {
+        event.preventDefault();
+        if (key === ' ' || key === 'Enter') toggleSelected();
+        else {
+          if (key === 'ArrowLeft') state.selected[0]--;
+          if (key === 'ArrowRight') state.selected[0]++;
+          if (key === 'ArrowDown') state.selected[1]--;
+          if (key === 'ArrowUp') state.selected[1]++;
+          updateInspector(); render();
+        }
+        return;
+      }
+      var presets = ['deskOrganizer', 'sdCardVault', 'cableComb', 'rpiPicoMount', 'sdfDock'];
+      var index = Number(key) - 1;
+      if (/^[1-5]$/.test(key)) { event.preventDefault(); loadPreset(presets[index], true); return; }
       var handled = true;
-      switch (key) {
-        case '1': $('preset-select').value = 'deskOrganizer'; loadPreset('deskOrganizer'); break;
-        case '2': $('preset-select').value = 'sdCardVault'; loadPreset('sdCardVault'); break;
-        case '3': $('preset-select').value = 'cableComb'; loadPreset('cableComb'); break;
-        case '4': $('preset-select').value = 'rpiPicoMount'; loadPreset('rpiPicoMount'); break;
+      switch (key.toLowerCase()) {
         case 'b': state.primitive = 'box'; setSegment('[data-prim]', 'box'); updateChips(); break;
         case 'c': state.primitive = 'cylinder'; setSegment('[data-prim]', 'cylinder'); updateChips(); break;
         case 's': state.primitive = 'sphere'; setSegment('[data-prim]', 'sphere'); updateChips(); break;
@@ -776,36 +977,37 @@
         case 't': $('theme-toggle').click(); break;
         case 'r': $('reset-grid').click(); break;
         case '?': $('help-toggle').click(); break;
-        case 'ArrowLeft': state.yawDeg = Math.max(-180, state.yawDeg - 5); $('yaw').value = String(state.yawDeg); updateChips(); render(); break;
-        case 'ArrowRight': state.yawDeg = Math.min(180, state.yawDeg + 5); $('yaw').value = String(state.yawDeg); updateChips(); render(); break;
-        case 'ArrowUp': state.pitchDeg = Math.min(80, state.pitchDeg + 5); $('pitch').value = String(state.pitchDeg); updateChips(); render(); break;
-        case 'ArrowDown': state.pitchDeg = Math.max(-80, state.pitchDeg - 5); $('pitch').value = String(state.pitchDeg); updateChips(); render(); break;
-        case 'PageUp': setSlice(state.slice + 1); break;
-        case 'PageDown': setSlice(state.slice - 1); break;
+        case 'arrowleft': setView(state.yawDeg - 5, state.pitchDeg); break;
+        case 'arrowright': setView(state.yawDeg + 5, state.pitchDeg); break;
+        case 'arrowup': setView(state.yawDeg, state.pitchDeg + 5); break;
+        case 'arrowdown': setView(state.yawDeg, state.pitchDeg - 5); break;
+        case 'pageup': setSlice(state.slice + 1); break;
+        case 'pagedown': setSlice(state.slice - 1); break;
         default: handled = false;
       }
-      if (handled) evt.preventDefault();
-    });
-
-    window.addEventListener('resize', function () { render(); });
-  }
-
-  function setSlice(value) {
-    state.slice = Math.max(0, Math.min(state.grid.nz - 1, value));
-    $('slice').value = String(state.slice);
-    updateChips();
-    render();
+      if (handled) event.preventDefault();
+    }));
+    window.addEventListener('resize', render);
+    if (typeof ResizeObserver === 'function') new ResizeObserver(render).observe(canvas);
   }
 
   function init() {
     var stored = 'light';
-    try { stored = localStorage.getItem('voxelsynth-theme') || 'light'; } catch (err) { /* storage may be blocked */ }
-    state.grid = V.loadPreset('deskOrganizer', { pitchMm: 2, nx: 24, ny: 18, nz: 12 });
+    try { stored = localStorage.getItem('voxelsynth-theme') || 'light'; } catch (error) { /* Local storage is optional. */ }
+    state.grid = V.loadPreset('deskOrganizer');
+    state.slice = Math.floor(state.grid.nz / 2); state.selected[2] = state.slice;
     state.theme = stored === 'dark' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', state.theme);
-    $('theme-toggle').textContent = state.theme === 'dark' ? 'Light sheet' : 'Dark sheet';
-    bindEvents();
-    recompute();
+    $('theme-toggle').textContent = state.theme === 'dark' ? 'Light theme' : 'Dark theme';
+    syncLatticeInputs(); bindEvents(); recompute();
+    window.VoxelSynthStudio = {
+      snapshot: function () { return V.serializeGrid(state.grid); },
+      importText: importText,
+      inspect: function () { return { selected: state.selected.slice(), slice: state.slice, yawDeg: state.yawDeg, pitchDeg: state.pitchDeg,
+        width: state.viewportWidth, height: state.viewportHeight, dpr: state.dpr, zoom: state.zoom,
+        inset: Object.assign({}, state.inset), faceCount: state.faces.length, sliceOnly: state.sliceOnly, showSlice: state.showSlice,
+        stats: Object.assign({}, state.mesh.stats), history: { undo: state.undo.length, redo: state.redo.length } }; }
+    };
   }
 
   init();

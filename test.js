@@ -11,13 +11,17 @@ function solidBox(nx, ny, nz, pitch) {
 }
 
 function verifyDirectedEdges(mesh, label) {
-  const directed = new Set();
+  const directed = new Map();
   for (const tri of mesh.triangles) {
-    for (let e = 0; e < 3; e++) directed.add(tri[e] + '>' + tri[(e + 1) % 3]);
+    for (let e = 0; e < 3; e++) {
+      const key = tri[e] + '>' + tri[(e + 1) % 3];
+      directed.set(key, (directed.get(key) || 0) + 1);
+    }
   }
-  for (const key of directed) {
+  for (const [key, count] of directed) {
     const [u, v] = key.split('>');
-    assert.ok(directed.has(v + '>' + u), `${label}: directed edge ${key} has no opposite`);
+    assert.equal(count, 1, `${label}: directed edge ${key} has multiple incidences`);
+    assert.equal(directed.get(v + '>' + u), 1, `${label}: directed edge ${key} needs exactly one opposite`);
   }
   return directed;
 }
@@ -505,9 +509,9 @@ test('rasterizeSDF can subtract from an existing solid', () => {
 
 /* ------------------------------ Presets ------------------------------ */
 
-test('listPresets exposes exactly the four built in designs', () => {
+test('listPresets exposes the five built in designs', () => {
   assert.deepEqual(V.listPresets().sort(),
-    ['cableComb', 'deskOrganizer', 'rpiPicoMount', 'sdCardVault']);
+    ['cableComb', 'deskOrganizer', 'rpiPicoMount', 'sdCardVault', 'sdfDock']);
 });
 
 test('loadPreset rejects an unknown name', () => {
@@ -552,5 +556,299 @@ test('preset options change grid resolution and pitch', () => {
 });
 
 test('the library reports its semantic version', () => {
-  assert.equal(V.version, '1.0.0');
+  assert.equal(V.version, '2.0.0');
+});
+
+/* Regression audit: validation, lattice boundaries and topology. */
+test('grid allocation rejects oversized and unsafe shapes before allocating', () => {
+  assert.throws(() => V.createGrid(2000001, 1, 1), /cell limit/);
+  assert.throws(() => V.createGrid(Number.MAX_SAFE_INTEGER, 2, 2), /cell limit/);
+  assert.equal(V.createGrid(2000000, 1, 1).data.length, V.MAX_GRID_CELLS);
+});
+
+test('grid validation rejects malformed buffers and pitches', () => {
+  const original = V.createGrid(2, 2, 2);
+  for (const changed of [{ data: new Uint8Array(7) }, { data: new Float32Array(8) }, { data: [] }, { nx: 2.5 }, { nx: -2 }, { pitchMm: NaN }]) {
+    assert.throws(() => V.countVoxels({ ...original, ...changed }), TypeError);
+  }
+});
+
+test('fractional and nonfinite coordinates cannot alias another voxel', () => {
+  const grid = solidBox(4, 4, 4);
+  for (const cell of [[0, 0.5, 0], [0.5, 0, 0], [0, 0, 0.5], [NaN, 0, 0], [Infinity, 0, 0]]) {
+    assert.equal(V.getVoxel(grid, ...cell), 0);
+    assert.equal(V.setVoxel(grid, ...cell, 0), false);
+    assert.equal(V.inBounds(grid, ...cell), false);
+  }
+  assert.equal(V.countVoxels(grid), 64);
+});
+
+test('box sampling includes a center at its minimum and excludes its maximum', () => {
+  const grid = V.createGrid(4, 1, 1);
+  V.addBox(grid, 0.5, 0, 0, 1, 1, 1);
+  assert.deepEqual(Array.from(grid.data), [1, 0, 0, 0]);
+});
+
+test('zero size boxes do not add cells', () => {
+  const grid = V.createGrid(4, 4, 4);
+  V.addBox(grid, 0, 0, 0, 0, 2, 2);
+  assert.equal(V.countVoxels(grid), 0);
+});
+
+test('sphere sampling includes both ends of a closed radial boundary', () => {
+  const grid = V.createGrid(3, 3, 3);
+  V.addSphere(grid, 1.5, 1.5, 1.5, 1);
+  assert.equal(V.countVoxels(grid), 7);
+});
+
+test('cylinder axial sampling is half open and radial sampling is closed', () => {
+  const grid = V.createGrid(3, 3, 3);
+  V.addCylinder(grid, 1.5, 1.5, 0.5, 1, 1, 'z');
+  assert.equal(V.countVoxels(grid), 5);
+  assert.equal(V.getVoxel(grid, 1, 1, 0), 1);
+  assert.equal(V.getVoxel(grid, 1, 1, 1), 0);
+});
+
+test('invalid primitive dimensions and coordinates fail without mutation', () => {
+  const grid = solidBox(4, 4, 4), before = Array.from(grid.data);
+  for (const action of [
+    () => V.addBox(grid, 0, 0, 0, -2, 2, 2),
+    () => V.subtractBox(grid, NaN, 0, 0, 2, 2, 2),
+    () => V.addSphere(grid, 2, 2, 2, -1),
+    () => V.subtractSphere(grid, 2, 2, 2, Infinity),
+    () => V.addCylinder(grid, 2, 2, 0, 1, -2),
+    () => V.subtractCylinder(grid, 2, 2, 0, 0, 2)
+  ]) {
+    assert.throws(action, RangeError);
+    assert.deepEqual(Array.from(grid.data), before);
+  }
+});
+
+test('shell wall rounds upward to preserve the requested minimum thickness', () => {
+  const grid = solidBox(10, 10, 10, 2);
+  V.shellGrid(grid, 2.1);
+  assert.equal(V.countVoxels(grid), 1000 - 6 * 6 * 6);
+});
+
+test('invalid shell widths do not change geometry', () => {
+  const grid = solidBox(4, 4, 4);
+  for (const wall of [0, -1, NaN, Infinity]) assert.throws(() => V.shellGrid(grid, wall), RangeError);
+  assert.equal(V.countVoxels(grid), 64);
+});
+
+test('huge shell walls terminate at the available solid depth', () => {
+  const grid = solidBox(6, 6, 6);
+  V.shellGrid(grid, 1e12);
+  assert.equal(V.countVoxels(grid), 216);
+});
+
+test('booleans reject grids with incompatible physical pitch', () => {
+  const a = solidBox(4, 4, 4), b = solidBox(4, 4, 4, 2);
+  assert.throws(() => V.unionGrid(a, b), /matching pitch/);
+  assert.throws(() => V.subtractGrid(a, b), /matching pitch/);
+  assert.equal(V.countVoxels(a), 64);
+});
+
+test('mirror rejects unknown axes instead of silently using X', () => {
+  assert.throws(() => V.mirrorGrid(solidBox(4, 4, 4), 'xx'), RangeError);
+});
+
+test('edge contacts are detected even with opposite directed edges', () => {
+  const grid = V.createGrid(3, 3, 2);
+  V.setVoxel(grid, 0, 0, 0, 1); V.setVoxel(grid, 1, 1, 0, 1);
+  const stats = V.extractManifoldMesh(grid).stats;
+  assert.equal(stats.watertight, false);
+  assert.equal(stats.nonManifoldEdges, 1);
+  assert.equal(stats.nonManifoldVertices, 2);
+  assert.equal(stats.genusEstimate, null);
+});
+
+test('corner contacts fail the connected vertex link condition', () => {
+  const grid = V.createGrid(3, 3, 3);
+  V.setVoxel(grid, 0, 0, 0, 1); V.setVoxel(grid, 1, 1, 1, 1);
+  const stats = V.extractManifoldMesh(grid).stats;
+  assert.equal(stats.boundaryEdges, 0);
+  assert.equal(stats.nonManifoldEdges, 0);
+  assert.equal(stats.nonManifoldVertices, 1);
+  assert.equal(stats.surfaceComponents, 2);
+  assert.equal(stats.watertight, false);
+});
+
+test('separated closed components have total genus zero', () => {
+  const grid = V.createGrid(4, 4, 4);
+  V.setVoxel(grid, 0, 0, 0, 1); V.setVoxel(grid, 2, 2, 2, 1);
+  const stats = V.extractManifoldMesh(grid).stats;
+  assert.equal(stats.watertight, true);
+  assert.equal(stats.surfaceComponents, 2);
+  assert.equal(stats.eulerCharacteristic, 4);
+  assert.equal(stats.genusEstimate, 0);
+});
+
+test('a hollow shell accounts for outer and inner surface components', () => {
+  const grid = solidBox(8, 8, 8); V.shellGrid(grid, 1);
+  const stats = V.extractManifoldMesh(grid).stats;
+  assert.equal(stats.watertight, true);
+  assert.equal(stats.surfaceComponents, 2);
+  assert.equal(stats.eulerCharacteristic, 4);
+  assert.equal(stats.genusEstimate, 0);
+  assert.ok(Math.abs(stats.volumeMm3 - V.countVoxels(grid)) < 1e-9);
+});
+
+test('duplicated facets cannot pass counted edge verification', () => {
+  const mesh = V.extractManifoldMesh(solidBox(2, 2, 2));
+  mesh.triangles.push(mesh.triangles[0].slice()); mesh.normals.push(mesh.normals[0].slice());
+  const stats = V.analyzeMesh(mesh);
+  assert.equal(stats.watertight, false);
+  assert.equal(stats.nonManifoldEdges, 3);
+});
+
+test('missing facets produce explicit boundary edge diagnostics', () => {
+  const mesh = V.extractManifoldMesh(solidBox(2, 2, 2));
+  mesh.triangles.pop(); mesh.normals.pop();
+  const stats = V.analyzeMesh(mesh);
+  assert.equal(stats.watertight, false);
+  assert.equal(stats.boundaryEdges, 3);
+});
+
+test('unused OBJ vertices do not corrupt the surface Euler characteristic', () => {
+  const mesh = V.extractManifoldMesh(solidBox(2, 2, 2));
+  mesh.vertices.push([100, 100, 100]);
+  assert.equal(V.analyzeMesh(mesh).eulerCharacteristic, 2);
+});
+
+test('all 256 occupancy configurations of a 2 x 2 x 2 block preserve volume and face counts', () => {
+  for (let bits = 0; bits < 256; bits++) {
+    const grid = V.createGrid(2, 2, 2);
+    for (let i = 0; i < 8; i++) grid.data[i] = (bits >> i) & 1;
+    const mesh = V.extractManifoldMesh(grid);
+    assert.equal(mesh.triangles.length, V.countExposedFaces(grid) * 2, `mask ${bits}`);
+    assert.ok(Math.abs(mesh.stats.volumeMm3 - V.countVoxels(grid)) < 1e-9, `mask ${bits}`);
+  }
+});
+
+test('nonfinite infill and invalid material density are rejected', () => {
+  const grid = solidBox(4, 4, 4), mesh = V.extractManifoldMesh(grid);
+  for (const value of [NaN, Infinity]) {
+    assert.throws(() => V.extractManifoldMesh(grid, { infillPercent: value }), RangeError);
+    assert.throws(() => V.estimateMass(mesh, { infillPercent: value }), RangeError);
+  }
+  for (const density of [0, -2, NaN, Infinity]) assert.throws(() => V.estimateMass(mesh, { density }), RangeError);
+  assert.throws(() => V.estimateMass(mesh, { material: 'unknown' }), /unknown material/);
+});
+
+test('mass estimation inherits the mesh infill percentage', () => {
+  const mesh = V.extractManifoldMesh(solidBox(10, 10, 10), { infillPercent: 25 });
+  assert.equal(V.estimateMass(mesh).infillPercent, 25);
+  assert.ok(Math.abs(V.estimateMass(mesh).grams - 0.31) < 1e-9);
+});
+
+test('smooth union with zero blending radius is an ordinary finite union', () => {
+  assert.equal(V.sdfSmoothUnion(-2, 3, 0), -2);
+  assert.equal(V.sdfSmoothUnion(1, 1, 0), 1);
+  for (const width of [-1, NaN, Infinity]) assert.throws(() => V.sdfSmoothUnion(1, 2, width), RangeError);
+});
+
+test('SDF replace removes occupancy outside the new field', () => {
+  const grid = solidBox(6, 6, 6);
+  V.rasterizeSDF(grid, (x, y, z) => V.sdfSphere(x, y, z, 3, 3, 3, 1), 'replace');
+  assert.equal(V.countVoxels(grid), 8);
+});
+
+test('SDF errors and nonfinite samples fail transactionally', () => {
+  const grid = solidBox(4, 4, 4), before = Array.from(grid.data);
+  assert.throws(() => V.rasterizeSDF(grid, () => -1, 'unknown'), RangeError);
+  let samples = 0;
+  assert.throws(() => V.rasterizeSDF(grid, () => ++samples < 5 ? -1 : NaN, 'subtract'), RangeError);
+  assert.deepEqual(Array.from(grid.data), before);
+  assert.throws(() => V.rasterizeSDF(grid, () => { throw new Error('field failed'); }, 'replace'), /field failed/);
+  assert.deepEqual(Array.from(grid.data), before);
+});
+
+test('snapshot rejects truncated, overlong and nonbinary occupancy', () => {
+  const original = V.serializeGrid(solidBox(2, 2, 2));
+  for (const raw of ['1111111', '111111111', '1111x111']) {
+    const cells = Buffer.from(raw).toString('base64');
+    assert.throws(() => V.deserializeGrid({ ...original, cells }), TypeError);
+  }
+});
+
+test('snapshot rejects invalid or noncanonical base64', () => {
+  const original = V.serializeGrid(V.createGrid(1, 1, 1));
+  for (const cells of ['!!!!', 'MA= ', 'MB==', 'MA', 12, null]) {
+    assert.throws(() => V.deserializeGrid({ ...original, cells }), TypeError);
+  }
+});
+
+test('preset dispatch rejects inherited object property names', () => {
+  for (const name of ['__proto__', 'constructor', 'toString']) assert.throws(() => V.loadPreset(name), RangeError);
+});
+
+test('preset zero and invalid options are not silently defaulted', () => {
+  for (const name of V.listPresets()) {
+    for (const options of [{ nx: 0 }, { pitchMm: 0 }, { ny: NaN }, { nz: 3 }]) assert.throws(() => V.loadPreset(name, options), RangeError);
+  }
+  assert.throws(() => V.deskOrganizerPreset({ compartments: 0 }), RangeError);
+  assert.throws(() => V.cableCombPreset({ channels: 0 }), RangeError);
+});
+
+test('board fixture retains raised standoffs after clearing the interior', () => {
+  const grid = V.rpiPicoMountPreset();
+  assert.equal(V.getVoxel(grid, 5, 2, 3), 1);
+  assert.equal(V.getVoxel(grid, 4, 3, 3), 0);
+});
+
+test('SDF dock is generated by a finite blended field and has a flat manifold rim', () => {
+  const grid = V.sdfDockPreset();
+  const stats = V.extractManifoldMesh(grid).stats;
+  assert.equal(stats.watertight, true);
+  assert.ok(stats.voxelCount > 0);
+  assert.ok(stats.boundingBoxMm.max[2] <= grid.nz * grid.pitchMm * 0.58 + grid.pitchMm / 2);
+});
+
+test('SDF primitives reject malformed dimensions, nonfinite inputs and arithmetic overflow', () => {
+  assert.throws(() => V.sdfBox(0, 0, 0, [0, 0], [1, 1, 1]), TypeError);
+  assert.throws(() => V.sdfBox(0, 0, 0, [0, 0, 0], [-1, 1, 1]), RangeError);
+  assert.throws(() => V.sdfSphere(0, 0, 0, 0, 0, 0, -1), RangeError);
+  assert.throws(() => V.sdfSphere(-1e308, 0, 0, 1e308, 0, 0, 1), RangeError);
+  assert.throws(() => V.sdfCylinder(0, 0, 0, 0, 0, 0, 1, 0), RangeError);
+  assert.throws(() => V.sdfCylinder(NaN, 0, 0, 0, 0, 0, 1, 1), RangeError);
+});
+
+test('mass estimates reject corrupt volumes and overflowing products', () => {
+  for (const volumeCm3 of [NaN, Infinity, -1]) assert.throws(() => V.estimateMass({ stats: { volumeCm3 } }), TypeError);
+  assert.throws(() => V.estimateMass({ stats: { volumeCm3: 10 } }, { density: 1e308 }), RangeError);
+});
+
+test('mesh volume uses a nearby reference to remain stable under large translations', () => {
+  const mesh = V.extractManifoldMesh(solidBox(4, 5, 6, 0.001));
+  mesh.vertices = mesh.vertices.map(point => point.map(value => value + 1e12));
+  const stats = V.analyzeMesh(mesh);
+  const expected = stats.boundingBoxMm.size.reduce((a, b) => a * b, 1);
+  assert.equal(stats.watertight, true);
+  assert.ok(Math.abs(stats.volumeMm3 - expected) / expected < 1e-12);
+});
+
+test('a full capacity snapshot validates canonically without recursive regular expression limits', () => {
+  const grid = V.createGrid(V.MAX_GRID_CELLS, 1, 1);
+  grid.data[0] = 1; grid.data[grid.data.length - 1] = 1;
+  const restored = V.deserializeGrid(V.serializeGrid(grid));
+  assert.equal(restored.data.length, V.MAX_GRID_CELLS);
+  assert.equal(V.countVoxels(restored), 2);
+});
+
+test('sphere center sampling stays finite when squared distances would overflow', () => {
+  const grid = V.createGrid(1, 1, 1, 1);
+  V.addSphere(grid, 1e200, 1e200, 1e200, 1e200);
+  assert.equal(V.countVoxels(grid), 0);
+});
+test('cylinder center sampling avoids Infinity comparison for far radial coordinates', () => {
+  const grid = V.createGrid(1, 1, 1, 1);
+  V.addCylinder(grid, 1e200, 1e200, 0, 1e200, 1, 'z');
+  assert.equal(V.countVoxels(grid), 0);
+});
+test('complex occupancy is rejected before allocating an oversized surface', () => {
+  const grid = V.createGrid(48, 48, 32, 1);
+  for (let z=0;z<32;z++) for(let y=0;y<48;y++) for(let x=0;x<48;x++) if((x+y+z)%2===0) V.setVoxel(grid,x,y,z,1);
+  assert.throws(() => V.extractManifoldMesh(grid), /triangle budget/);
+  assert.equal(V.MAX_MESH_TRIANGLES,250000);
 });

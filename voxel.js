@@ -18,11 +18,26 @@
   var DEFAULT_PLA_DENSITY = 1.24;
   var DEFAULT_PETG_DENSITY = 1.27;
   var AXIS_NAMES = ['x', 'y', 'z'];
+  var MAX_GRID_CELLS = 2000000;
+  var MAX_MESH_TRIANGLES = 250000;
 
   function assertPositiveInteger(value, label) {
     if (!Number.isFinite(value) || Math.floor(value) !== value || value <= 0) {
       throw new RangeError(label + ' must be a positive integer');
     }
+  }
+
+  function assertFinite(value, label) {
+    if (!Number.isFinite(value)) throw new RangeError(label + ' must be finite');
+  }
+
+  function assertPositive(value, label) {
+    assertFinite(value, label);
+    if (value <= 0) throw new RangeError(label + ' must be positive');
+  }
+
+  function assertGeometry(values) {
+    values.forEach(function (value) { assertFinite(value, 'geometry coordinate'); });
   }
 
   function clamp(value, low, high) {
@@ -38,9 +53,11 @@
     assertPositiveInteger(ny, 'ny');
     assertPositiveInteger(nz, 'nz');
     if (pitchMm === undefined) pitchMm = 1;
-    if (!Number.isFinite(pitchMm) || pitchMm <= 0) {
-      throw new RangeError('pitchMm must be a positive finite number');
+    assertPositive(pitchMm, 'pitchMm');
+    if (!Number.isSafeInteger(nx * ny * nz) || nx * ny * nz > MAX_GRID_CELLS) {
+      throw new RangeError('grid exceeds the ' + MAX_GRID_CELLS + ' cell limit');
     }
+    if (pitchMm < 1e-6 || pitchMm > 1e6) throw new RangeError('pitchMm must be between 0.000001 and 1000000');
     return {
       nx: nx,
       ny: ny,
@@ -58,8 +75,12 @@
   }
 
   function assertGrid(grid) {
-    if (!grid || !grid.data || !Number.isFinite(grid.nx) || !Number.isFinite(grid.ny) || !Number.isFinite(grid.nz)) {
-      throw new TypeError('expected a VoxelSynth grid');
+    if (!grid || !Number.isInteger(grid.nx) || !Number.isInteger(grid.ny) || !Number.isInteger(grid.nz) ||
+        grid.nx <= 0 || grid.ny <= 0 || grid.nz <= 0 || !ArrayBuffer.isView(grid.data) ||
+        Object.prototype.toString.call(grid.data) !== '[object Uint8Array]' ||
+        grid.data.length !== grid.nx * grid.ny * grid.nz || grid.data.length > MAX_GRID_CELLS ||
+        !Number.isFinite(grid.pitchMm) || grid.pitchMm < 1e-6 || grid.pitchMm > 1e6) {
+      throw new TypeError('expected a complete VoxelSynth Uint8Array grid');
     }
   }
 
@@ -68,7 +89,8 @@
   }
 
   function inBounds(grid, x, y, z) {
-    return x >= 0 && y >= 0 && z >= 0 && x < grid.nx && y < grid.ny && z < grid.nz;
+    return Number.isInteger(x) && Number.isInteger(y) && Number.isInteger(z) &&
+      x >= 0 && y >= 0 && z >= 0 && x < grid.nx && y < grid.ny && z < grid.nz;
   }
 
   function getVoxel(grid, x, y, z) {
@@ -89,7 +111,7 @@
     return total;
   }
 
-  function countExposedFaces(grid) {
+  function countExposedFaces(grid, stopAfter) {
     assertGrid(grid);
     var faces = 0;
     for (var z = 0; z < grid.nz; z++) {
@@ -102,6 +124,7 @@
           if (!getVoxel(grid, x, y + 1, z)) faces++;
           if (!getVoxel(grid, x, y, z - 1)) faces++;
           if (!getVoxel(grid, x, y, z + 1)) faces++;
+          if (stopAfter !== undefined && faces > stopAfter) return faces;
         }
       }
     }
@@ -117,15 +140,18 @@
     return countVoxels(grid) * 12;
   }
 
-  function cellsForRange(grid, minMm, maxMm, axisIndex) {
+  function cellsForRange(grid, minMm, maxMm, axisIndex, inclusiveMax) {
+    assertGeometry([minMm, maxMm]);
     var limit = axisIndex === 0 ? grid.nx : (axisIndex === 1 ? grid.ny : grid.nz);
-    var lo = clamp(Math.round(minMm / grid.pitchMm), 0, limit);
-    var hi = clamp(Math.round(maxMm / grid.pitchMm), 0, limit);
-    if (hi < lo) { var tmp = lo; lo = hi; hi = tmp; }
+    var lo = clamp(Math.ceil(minMm / grid.pitchMm - 0.5), 0, limit);
+    var hi = clamp(inclusiveMax ? Math.floor(maxMm / grid.pitchMm - 0.5) + 1 :
+      Math.ceil(maxMm / grid.pitchMm - 0.5), 0, limit);
     return [lo, hi];
   }
 
   function forEachBoxCell(grid, min, size, callback) {
+    assertGeometry(min.concat(size));
+    if (size.some(function (v) { return v < 0; })) throw new RangeError('box sizes must be nonnegative');
     var xr = cellsForRange(grid, min[0], min[0] + size[0], 0);
     var yr = cellsForRange(grid, min[1], min[1] + size[1], 1);
     var zr = cellsForRange(grid, min[2], min[2] + size[2], 2);
@@ -166,18 +192,19 @@
 
   function applySphere(grid, cx, cy, cz, radius, value) {
     assertGrid(grid);
+    assertGeometry([cx, cy, cz]);
+    assertPositive(radius, 'radius');
     var pitch = grid.pitchMm;
-    var r2 = radius * radius;
-    var xr = cellsForRange(grid, cx - radius, cx + radius, 0);
-    var yr = cellsForRange(grid, cy - radius, cy + radius, 1);
-    var zr = cellsForRange(grid, cz - radius, cz + radius, 2);
+    var xr = cellsForRange(grid, cx - radius, cx + radius, 0, true);
+    var yr = cellsForRange(grid, cy - radius, cy + radius, 1, true);
+    var zr = cellsForRange(grid, cz - radius, cz + radius, 2, true);
     for (var z = zr[0]; z < zr[1]; z++) {
       var dz = (z + 0.5) * pitch - cz;
       for (var y = yr[0]; y < yr[1]; y++) {
         var dy = (y + 0.5) * pitch - cy;
         for (var x = xr[0]; x < xr[1]; x++) {
           var dx = (x + 0.5) * pitch - cx;
-          if (dx * dx + dy * dy + dz * dz <= r2) setVoxel(grid, x, y, z, value);
+          if (Math.hypot(dx, dy, dz) <= radius) setVoxel(grid, x, y, z, value);
         }
       }
     }
@@ -194,26 +221,28 @@
 
   function applyCylinder(grid, cx, cy, cz, radius, height, axis, value) {
     assertGrid(grid);
+    assertGeometry([cx, cy, cz]);
+    assertPositive(radius, 'radius');
+    assertPositive(height, 'height');
     var a = normalizeAxis(axis);
     var pitch = grid.pitchMm;
-    var r2 = radius * radius;
     var center = [cx, cy, cz];
     var base = center[a];
     var u = (a + 1) % 3;
     var v = (a + 2) % 3;
     var ar = cellsForRange(grid, base, base + height, a);
-    var ur = cellsForRange(grid, center[u] - radius, center[u] + radius, u);
-    var vr = cellsForRange(grid, center[v] - radius, center[v] + radius, v);
+    var ur = cellsForRange(grid, center[u] - radius, center[u] + radius, u, true);
+    var vr = cellsForRange(grid, center[v] - radius, center[v] + radius, v, true);
     var cell = [0, 0, 0];
-    for (var ai = ar[0]; ai < ar[1]; ai++) {
-      var ac = (ai + 0.5) * pitch;
+    for (var axisCell = ar[0]; axisCell < ar[1]; axisCell++) {
+      var ac = (axisCell + 0.5) * pitch;
       if (ac < base || ac >= base + height) continue;
       for (var ui = ur[0]; ui < ur[1]; ui++) {
         var du = (ui + 0.5) * pitch - center[u];
         for (var vi = vr[0]; vi < vr[1]; vi++) {
           var dv = (vi + 0.5) * pitch - center[v];
-          if (du * du + dv * dv <= r2) {
-            cell[a] = ai; cell[u] = ui; cell[v] = vi;
+          if (Math.hypot(du, dv) <= radius) {
+            cell[a] = axisCell; cell[u] = ui; cell[v] = vi;
             setVoxel(grid, cell[0], cell[1], cell[2], value);
           }
         }
@@ -237,7 +266,8 @@
     if (axis === 0) return 'x';
     if (axis === 1) return 'y';
     if (axis === 2) return 'z';
-    return 'x';
+    if (axis === undefined) return 'x';
+    throw new RangeError('mirror axis must be x, y, or z');
   }
 
   function mirrorGrid(grid, axis) {
@@ -266,7 +296,8 @@
    */
   function shellGrid(grid, wallThicknessMm) {
     assertGrid(grid);
-    var k = Math.max(1, Math.round(wallThicknessMm / grid.pitchMm));
+    assertPositive(wallThicknessMm, 'wall thickness');
+    var k = Math.min(Math.ceil(wallThicknessMm / grid.pitchMm), Math.ceil(Math.min(grid.nx, grid.ny, grid.nz) / 2));
     var current = new Uint8Array(grid.data);
     var nx = grid.nx, ny = grid.ny, nz = grid.nz;
     var original = grid.data;
@@ -297,6 +328,7 @@
 
   function unionGrid(target, source) {
     assertGrid(target); assertGrid(source);
+    if (target.pitchMm !== source.pitchMm) throw new RangeError('boolean grids must have matching pitch');
     var nx = Math.min(target.nx, source.nx);
     var ny = Math.min(target.ny, source.ny);
     var nz = Math.min(target.nz, source.nz);
@@ -312,6 +344,7 @@
 
   function subtractGrid(target, source) {
     assertGrid(target); assertGrid(source);
+    if (target.pitchMm !== source.pitchMm) throw new RangeError('boolean grids must have matching pitch');
     var nx = Math.min(target.nx, source.nx);
     var ny = Math.min(target.ny, source.ny);
     var nz = Math.min(target.nz, source.nz);
@@ -386,6 +419,7 @@
    * u, then along v. Every rectangle is emitted as a single quad.
    */
   function buildQuads(grid) {
+    assertGrid(grid);
     var quads = [];
     for (var a = 0; a < 3; a++) {
       var u = (a + 1) % 3;
@@ -432,12 +466,122 @@
 
   function pointKey(p) { return p[0] + ',' + p[1] + ',' + p[2]; }
 
+  function assertMesh(mesh) {
+    if (!mesh || !Array.isArray(mesh.vertices) || !Array.isArray(mesh.triangles) ||
+        !Array.isArray(mesh.normals) || mesh.normals.length !== mesh.triangles.length) {
+      throw new TypeError('expected vertices, triangles and one normal per triangle');
+    }
+    mesh.vertices.forEach(function (v) {
+      if (!Array.isArray(v) || v.length !== 3 || !v.every(Number.isFinite)) throw new TypeError('invalid mesh vertex');
+    });
+    mesh.triangles.forEach(function (tri, i) {
+      if (!Array.isArray(tri) || tri.length !== 3 || !tri.every(function (id) {
+        return Number.isInteger(id) && id >= 0 && id < mesh.vertices.length;
+      }) || new Set(tri).size !== 3) throw new TypeError('invalid triangle indices');
+      var a = mesh.vertices[tri[0]], b = mesh.vertices[tri[1]], c = mesh.vertices[tri[2]];
+      var cross = cross3(sub3(b, a), sub3(c, a));
+      var normal = mesh.normals[i];
+      if (!Number.isFinite(length3(cross)) || length3(cross) <= 0) throw new TypeError('degenerate triangle');
+      if (!Array.isArray(normal) || normal.length !== 3 || !normal.every(Number.isFinite) ||
+          Math.abs(length3(normal) - 1) > 1e-5 || dot3(normal, cross) <= 0) {
+        throw new TypeError('facet normal must be an outward unit vector');
+      }
+    });
+  }
+
+  /* A manifold requires two oriented incidences per edge and a single cycle
+   * in every vertex link. Edge pairs alone miss both edge and point contacts. */
+  function analyzeMesh(mesh) {
+    assertMesh(mesh);
+    var vertices = mesh.vertices, triangles = mesh.triangles;
+    var edges = new Map(), links = new Map();
+    var parent = triangles.map(function (_, i) { return i; });
+    function find(i) {
+      while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+      return i;
+    }
+    function join(a, b) { parent[find(a)] = find(b); }
+    var area = 0, volume = 0, correction = 0;
+    var reference = triangles.length ? vertices[triangles[0][0]] : [0, 0, 0];
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    triangles.forEach(function (ids, t) {
+      var a = vertices[ids[0]], b = vertices[ids[1]], c = vertices[ids[2]];
+      area += length3(cross3(sub3(b, a), sub3(c, a))) / 2;
+      var term = dot3(sub3(a, reference), cross3(sub3(b, reference), sub3(c, reference))) / 6 - correction;
+      var sum = volume + term;
+      correction = (sum - volume) - term;
+      volume = sum;
+      for (var e = 0; e < 3; e++) {
+        var u = ids[e], v = ids[(e + 1) % 3], w = ids[(e + 2) % 3];
+        var key = Math.min(u, v) + ':' + Math.max(u, v);
+        var edge = edges.get(key);
+        if (!edge) { edge = { count: 0, balance: 0, triangle: t }; edges.set(key, edge); }
+        else join(t, edge.triangle);
+        edge.count++;
+        edge.balance += u < v ? 1 : -1;
+        if (!links.has(u)) links.set(u, []);
+        links.get(u).push([v, w]);
+        for (var d = 0; d < 3; d++) {
+          lo[d] = Math.min(lo[d], vertices[u][d]);
+          hi[d] = Math.max(hi[d], vertices[u][d]);
+        }
+      }
+    });
+    if (!triangles.length) { lo = [0, 0, 0]; hi = [0, 0, 0]; }
+    var boundary = 0, nonManifoldEdges = 0, windingErrors = 0, unmatched = 0;
+    edges.forEach(function (edge) {
+      if (edge.count === 1) boundary++;
+      if (edge.count > 2) nonManifoldEdges++;
+      if (edge.count === 2 && edge.balance !== 0) windingErrors++;
+      if (edge.count !== 2 || edge.balance !== 0) unmatched += Math.max(1, Math.abs(edge.balance), edge.count - 2);
+    });
+    var nonManifoldVertices = 0;
+    links.forEach(function (pairs) {
+      var graph = new Map(), degree = new Map();
+      pairs.forEach(function (pair) {
+        for (var i = 0; i < 2; i++) {
+          var u = pair[i], v = pair[1 - i];
+          if (!graph.has(u)) graph.set(u, new Set());
+          graph.get(u).add(v);
+          degree.set(u, (degree.get(u) || 0) + 1);
+        }
+      });
+      var start = graph.keys().next().value, seen = new Set([start]), stack = [start];
+      while (stack.length) graph.get(stack.pop()).forEach(function (id) {
+        if (!seen.has(id)) { seen.add(id); stack.push(id); }
+      });
+      if (seen.size !== graph.size || Array.from(degree.values()).some(function (n) { return n !== 2; })) nonManifoldVertices++;
+    });
+    var components = new Set(triangles.map(function (_, i) { return find(i); })).size;
+    var chi = links.size - edges.size + triangles.length;
+    var manifold = triangles.length > 0 && unmatched === 0 && nonManifoldVertices === 0;
+    return {
+      triangleCount: triangles.length,
+      uniqueVertices: links.size,
+      uniqueEdges: edges.size,
+      surfaceAreaMm2: area,
+      volumeMm3: volume,
+      volumeCm3: volume / 1000,
+      boundingBoxMm: { min: lo, max: hi, size: hi.map(function (n, i) { return n - lo[i]; }) },
+      eulerCharacteristic: chi,
+      surfaceComponents: components,
+      genusEstimate: manifold ? (2 * components - chi) / 2 : null,
+      watertight: manifold,
+      boundaryEdges: boundary,
+      nonManifoldEdges: nonManifoldEdges,
+      nonManifoldVertices: nonManifoldVertices,
+      windingErrors: windingErrors,
+      unmatchedEdges: unmatched
+    };
+  }
+
   /*
    * Coplanar greedy quads are overlaid on a shared integer lattice. A quad
    * covers a rectangle of unit face cells, and every covered unit cell emits
    * exactly two triangles. All surface vertices are lattice coordinates, so
    * two adjacent quads always describe identical boundaries. This yields a
-   * globally consistent triangle manifold without T junctions.
+   * consistent surface triangulation without T junctions. Occupancy point and
+   * edge contacts still require the separate incidence and link verifier.
    */
   function quadUnitTriangles(quad) {
     var tris = [];
@@ -466,73 +610,31 @@
   }
 
   function buildMeshStats(mesh, grid, quadCount) {
-    var vertices = mesh.vertices;
+    var topology = analyzeMesh(mesh);
     var triangles = mesh.triangles;
-    var surfaceArea = 0;
-    var signedVolume = 0;
-    var lo = [Infinity, Infinity, Infinity];
-    var hi = [-Infinity, -Infinity, -Infinity];
-    for (var i = 0; i < vertices.length; i++) {
-      for (var d = 0; d < 3; d++) {
-        if (vertices[i][d] < lo[d]) lo[d] = vertices[i][d];
-        if (vertices[i][d] > hi[d]) hi[d] = vertices[i][d];
-      }
-    }
-    if (!vertices.length) { lo = [0, 0, 0]; hi = [0, 0, 0]; }
-    var directed = new Set();
-    var undirected = new Set();
-    for (var t = 0; t < triangles.length; t++) {
-      var a = vertices[triangles[t][0]];
-      var b = vertices[triangles[t][1]];
-      var c = vertices[triangles[t][2]];
-      surfaceArea += 0.5 * length3(cross3(sub3(b, a), sub3(c, a)));
-      signedVolume += dot3(a, cross3(b, c)) / 6;
-      var ids = triangles[t];
-      for (var e = 0; e < 3; e++) {
-        var u = ids[e];
-        var v = ids[(e + 1) % 3];
-        directed.add(u + '>' + v);
-        undirected.add(Math.min(u, v) + ':' + Math.max(u, v));
-      }
-    }
-    var unmatched = 0;
-    directed.forEach(function (key) {
-      var parts = key.split('>');
-      if (!directed.has(parts[1] + '>' + parts[0])) unmatched++;
-    });
-    var chi = vertices.length - undirected.size + triangles.length;
-    var volumeCm3 = signedVolume / 1000;
+    var volumeCm3 = topology.volumeCm3;
     var infill = mesh.infillPercent;
-    mesh.stats = {
+    mesh.stats = Object.assign(topology, {
       voxelCount: countVoxels(grid),
       exposedFaceCount: countExposedFaces(grid),
       naiveTriangleCount: naiveTriangleCount(grid),
       quadCount: quadCount,
       triangleCount: triangles.length,
       mergeRatio: triangles.length ? naiveTriangleCount(grid) / triangles.length : 0,
-      surfaceAreaMm2: surfaceArea,
-      volumeMm3: signedVolume,
-      volumeCm3: volumeCm3,
-      boundingBoxMm: {
-        min: lo.slice(), max: hi.slice(),
-        size: [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
-      },
-      eulerCharacteristic: chi,
-      genusEstimate: (2 - chi) / 2,
-      uniqueVertices: vertices.length,
-      uniqueEdges: undirected.size,
-      watertight: unmatched === 0 && triangles.length > 0,
-      unmatchedEdges: unmatched,
       infillPercent: infill,
       plaMassG: volumeCm3 * (infill / 100) * DEFAULT_PLA_DENSITY,
-      petgMassG: volumeCm3 * (infill / 100) * DEFAULT_PETG_DENSITY
-    };
+      petgMassG: volumeCm3 * (infill / 100) * DEFAULT_PETG_DENSITY,
+      voxelVolumeMm3: countVoxels(grid) * Math.pow(grid.pitchMm, 3),
+      volumeErrorMm3: Math.abs(topology.volumeMm3 - countVoxels(grid) * Math.pow(grid.pitchMm, 3))
+    });
     return mesh;
   }
 
   function extractManifoldMesh(grid, options) {
     assertGrid(grid);
+    if (countExposedFaces(grid, MAX_MESH_TRIANGLES / 2) * 2 > MAX_MESH_TRIANGLES) throw new RangeError('Surface exceeds the ' + MAX_MESH_TRIANGLES + ' triangle budget. Simplify the occupancy or use a coarser lattice.');
     var opts = options || {};
+    if (opts.infillPercent !== undefined) assertFinite(opts.infillPercent, 'infill');
     var pitch = grid.pitchMm;
     var quads = buildQuads(grid);
     var i, d;
@@ -570,11 +672,12 @@
 
     /* Defensive: a closed surface must have outward winding and positive volume. */
     var probe = 0;
+    var reference = mesh.triangles.length ? mesh.vertices[mesh.triangles[0][0]] : [0, 0, 0];
     for (i = 0; i < mesh.triangles.length; i++) {
       var v0 = mesh.vertices[mesh.triangles[i][0]];
       var v1 = mesh.vertices[mesh.triangles[i][1]];
       var v2 = mesh.vertices[mesh.triangles[i][2]];
-      probe += dot3(v0, cross3(v1, v2)) / 6;
+      probe += dot3(sub3(v0, reference), cross3(sub3(v1, reference), sub3(v2, reference))) / 6;
     }
     if (probe < 0) {
       for (i = 0; i < mesh.triangles.length; i++) {
@@ -586,19 +689,27 @@
   }
 
   function estimateMass(mesh, options) {
+    if (!mesh || !mesh.stats || !Number.isFinite(mesh.stats.volumeCm3) || mesh.stats.volumeCm3 < 0) throw new TypeError('mass estimate requires a finite nonnegative mesh volume');
     var opts = options || {};
     var density = opts.density;
     if (density === undefined) {
       var material = String(opts.material || 'PLA').toLowerCase();
       density = material === 'petg' ? DEFAULT_PETG_DENSITY : DEFAULT_PLA_DENSITY;
     }
-    var infill = opts.infillPercent === undefined ? 100 : clamp(opts.infillPercent, 0, 100);
+    assertPositive(density, 'material density');
+    var materialName = String(opts.material || 'PLA').toLowerCase();
+    if (opts.density === undefined && materialName !== 'pla' && materialName !== 'petg') throw new RangeError('unknown material');
+    var infill = opts.infillPercent === undefined ? (mesh.infillPercent === undefined ? 100 : mesh.infillPercent) : opts.infillPercent;
+    assertFinite(infill, 'infill');
+    infill = clamp(infill, 0, 100);
     var volumeCm3 = mesh.stats ? mesh.stats.volumeCm3 : 0;
+    var grams = volumeCm3 * (infill / 100) * density;
+    assertFinite(grams, 'estimated mass');
     return {
       material: opts.material || 'PLA',
       infillPercent: infill,
       densityGPerCm3: density,
-      grams: volumeCm3 * (infill / 100) * density
+      grams: grams
     };
   }
 
@@ -613,11 +724,14 @@
   }
 
   function fmt(v) {
-    var s = v.toFixed(6);
-    return s === '-0.000000' ? '0.000000' : s;
+    assertFinite(v, 'export coordinate');
+    if (v === 0) return '0.000000';
+    var s = v.toString();
+    return /^-?\d+$/.test(s) ? s + '.000000' : s;
   }
 
   function meshFacets(mesh) {
+    assertMesh(mesh);
     var out = [];
     for (var i = 0; i < mesh.triangles.length; i++) {
       var ids = mesh.triangles[i];
@@ -662,6 +776,11 @@
     var off = 84;
     for (var i = 0; i < count; i++) {
       var f = facets[i];
+      var rounded = f.vertices.map(function (point) { return point.map(Math.fround); });
+      if (rounded.some(function (point) { return !point.every(Number.isFinite); }) ||
+          dot3(f.normal, cross3(sub3(rounded[1], rounded[0]), sub3(rounded[2], rounded[0]))) <= 0) {
+        throw new RangeError('binary STL float32 precision would collapse a facet; use ASCII STL or OBJ');
+      }
       view.setFloat32(off, f.normal[0], true);
       view.setFloat32(off + 4, f.normal[1], true);
       view.setFloat32(off + 8, f.normal[2], true);
@@ -677,6 +796,7 @@
   }
 
   function exportOBJ(mesh, name) {
+    assertMesh(mesh);
     var label = solidName(name);
     var lines = [
       '# VoxelSynth wavefront OBJ',
@@ -714,7 +834,9 @@
 
   function exportOpenSCAD(grid, pitchMm) {
     assertGrid(grid);
-    var p = (typeof pitchMm === 'number' && pitchMm > 0) ? pitchMm : grid.pitchMm;
+    var p = pitchMm === undefined ? grid.pitchMm : pitchMm;
+    assertPositive(p, 'export pitch');
+    if (p < 1e-6 || p > 1e6) throw new RangeError('export pitch must be between 0.000001 and 1000000');
     var boxes = [];
     var active = new Map();
     for (var z = 0; z <= grid.nz; z++) {
@@ -752,25 +874,192 @@
     return lines.join('\n') + '\n';
   }
 
+  function numericVector(text) {
+    var values = text.trim().split(/\s+/).map(function (part) {
+      if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?$/.test(part)) throw new TypeError('invalid numeric token');
+      return Number(part);
+    });
+    if (values.length !== 3 || !values.every(Number.isFinite)) throw new TypeError('expected three finite coordinates');
+    return values;
+  }
+
+  function facetBuilder() {
+    var mesh = { vertices: [], triangles: [], normals: [] }, lookup = new Map();
+    return {
+      mesh: mesh,
+      add: function (normal, points) {
+        var ids = points.map(function (point) {
+          var key = pointKey(point);
+          if (!lookup.has(key)) { lookup.set(key, mesh.vertices.length); mesh.vertices.push(point); }
+          return lookup.get(key);
+        });
+        mesh.triangles.push(ids);
+        mesh.normals.push(normal);
+      }
+    };
+  }
+
+  /* These readers validate the standards-compliant subset written above.
+   * They are independent of the mesh writer and never execute imported text. */
+  function parseAsciiSTL(text) {
+    if (typeof text !== 'string') throw new TypeError('ASCII STL must be text');
+    var lines = text.trim().split(/\r?\n/).map(function (line) { return line.trim(); });
+    if (!/^solid [A-Za-z0-9_.-]+$/.test(lines[0]) || lines[lines.length - 1] !== 'end' + lines[0]) {
+      throw new TypeError('STL solid names must match');
+    }
+    var builder = facetBuilder();
+    for (var i = 1; i < lines.length - 1; i += 7) {
+      if (!lines[i].startsWith('facet normal ') || lines[i + 1] !== 'outer loop' ||
+          lines[i + 5] !== 'endloop' || lines[i + 6] !== 'endfacet') throw new TypeError('incomplete STL facet');
+      var points = [2, 3, 4].map(function (offset) {
+        if (!lines[i + offset] || !lines[i + offset].startsWith('vertex ')) throw new TypeError('incomplete STL vertex');
+        return numericVector(lines[i + offset].slice(7));
+      });
+      builder.add(numericVector(lines[i].slice(13)), points);
+    }
+    assertMesh(builder.mesh);
+    return builder.mesh;
+  }
+
+  function parseBinarySTL(input) {
+    var bytes = Object.prototype.toString.call(input) === '[object ArrayBuffer]' ? new Uint8Array(input) : input;
+    if (!bytes || Object.prototype.toString.call(bytes) !== '[object Uint8Array]' || bytes.byteLength < 84) {
+      throw new TypeError('binary STL requires an 84 byte header');
+    }
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), count = view.getUint32(80, true);
+    if (bytes.byteLength !== 84 + count * 50) throw new TypeError('binary STL facet count does not match file length');
+    var builder = facetBuilder();
+    for (var i = 0; i < count; i++) {
+      var offset = 84 + i * 50;
+      function vector(at) { return [view.getFloat32(at, true), view.getFloat32(at + 4, true), view.getFloat32(at + 8, true)]; }
+      if (view.getUint16(offset + 48, true) !== 0) throw new TypeError('unsupported STL attribute bytes');
+      builder.add(vector(offset), [vector(offset + 12), vector(offset + 24), vector(offset + 36)]);
+    }
+    assertMesh(builder.mesh);
+    return builder.mesh;
+  }
+
+  function parseOBJ(text) {
+    if (typeof text !== 'string') throw new TypeError('OBJ must be text');
+    var mesh = { vertices: [], normals: [], triangles: [] }, normals = [], objects = 0;
+    text.split(/\r?\n/).forEach(function (line) {
+      line = line.trim();
+      if (!line || line[0] === '#') return;
+      if (/^o [A-Za-z0-9_.-]+$/.test(line)) { objects++; return; }
+      if (line.startsWith('v ')) { mesh.vertices.push(numericVector(line.slice(2))); return; }
+      if (line.startsWith('vn ')) { normals.push(numericVector(line.slice(3))); return; }
+      if (!line.startsWith('f ')) throw new TypeError('unsupported OBJ record');
+      var tokens = line.slice(2).split(/\s+/);
+      if (tokens.length !== 3 || !tokens.every(function (token) { return /^\d+\/\/\d+$/.test(token); })) throw new TypeError('OBJ face must contain three indexed vertices and normals');
+      var ids = tokens.map(function (token) { return token.split('//').map(Number); });
+      if (ids.some(function (pair) { return pair[1] !== ids[0][1]; }) || ids[0][1] < 1 || ids[0][1] > normals.length) throw new TypeError('invalid OBJ normal index');
+      mesh.triangles.push(ids.map(function (pair) { return pair[0] - 1; }));
+      mesh.normals.push(normals[ids[0][1] - 1]);
+    });
+    if (objects !== 1) throw new TypeError('OBJ must declare one object');
+    assertMesh(mesh);
+    return mesh;
+  }
+
+  function parseOpenSCAD(text) {
+    if (typeof text !== 'string') throw new TypeError('OpenSCAD must be text');
+    var shape = /\/\/ Grid: (\d+) x (\d+) x (\d+)/.exec(text);
+    var pitch = /^pitch = ([^;]+);$/m.exec(text);
+    var count = /\/\/ Solid cells: (\d+)/.exec(text), expectedBoxes = /\/\/ Merged boxes: (\d+)/.exec(text);
+    if (!shape || !pitch || !count || !expectedBoxes || !text.includes('module voxelsynth_body() {') ||
+        !text.trim().endsWith('voxelsynth_body();')) throw new TypeError('incomplete OpenSCAD metadata');
+    var grid = createGrid(Number(shape[1]), Number(shape[2]), Number(shape[3]), Number(pitch[1]));
+    var boxes = 0;
+    var records = text.split(/\r?\n/).map(function (line) { return line.trim(); }).filter(function (line) { return line && !line.startsWith('//'); });
+    if (records[0] !== '$fn = 24;' || records[1] !== pitch[0] || records[2] !== 'module voxelsynth_body() {' || records[3] !== 'union() {' ||
+        records[records.length - 3] !== '}' || records[records.length - 2] !== '}' || records[records.length - 1] !== 'voxelsynth_body();') {
+      throw new TypeError('OpenSCAD module and union must have balanced structure');
+    }
+    records.slice(4, -3).forEach(function (line) {
+      var match = /^translate\(\[([^\]]+)\]\) cube\(\[([^\]]+)\], center = false\);$/.exec(line);
+      if (!match) throw new TypeError('unsupported OpenSCAD statement');
+      var origin = numericVector(match[1].replace(/,/g, ' '));
+      var size = numericVector(match[2].replace(/,/g, ' '));
+      var limits = [grid.nx, grid.ny, grid.nz];
+      var from = [], to = [];
+      for (var d = 0; d < 3; d++) {
+        from[d] = Math.round(origin[d] / grid.pitchMm);
+        var cells = Math.round(size[d] / grid.pitchMm);
+        to[d] = from[d] + cells;
+        if (Math.abs(origin[d] / grid.pitchMm - from[d]) > 1e-8 || Math.abs(size[d] / grid.pitchMm - cells) > 1e-8 ||
+            cells <= 0 || from[d] < 0 || to[d] > limits[d]) throw new TypeError('OpenSCAD cube is outside the declared lattice');
+      }
+      for (var z = from[2]; z < to[2]; z++) for (var y = from[1]; y < to[1]; y++) for (var x = from[0]; x < to[0]; x++) {
+        if (getVoxel(grid, x, y, z)) throw new TypeError('OpenSCAD cubes overlap');
+        setVoxel(grid, x, y, z, 1);
+      }
+      boxes++;
+    });
+    if (countVoxels(grid) !== Number(count[1]) || boxes !== Number(expectedBoxes[1])) throw new TypeError('OpenSCAD occupancy or cube count mismatch');
+    return grid;
+  }
+
+  function verifyExports(grid) {
+    assertGrid(grid);
+    var source = extractManifoldMesh(grid), s = source.stats;
+    if (!s.watertight) throw new RangeError('export verification requires a nonempty manifold with no edge or point contacts');
+    var formats = [
+      { name: 'ASCII STL', payload: exportAsciiSTL(source), read: parseAsciiSTL },
+      { name: 'Binary STL', payload: exportBinarySTL(source), read: parseBinarySTL },
+      { name: 'OBJ', payload: exportOBJ(source), read: parseOBJ }
+    ];
+    var maximum = 0;
+    var results = formats.map(function (format) {
+      var restored = format.read(format.payload), topology = analyzeMesh(restored);
+      var error = Math.abs(topology.volumeMm3 - s.volumeMm3) / Math.max(Number.MIN_VALUE, s.volumeMm3);
+      if (!topology.watertight || topology.eulerCharacteristic !== s.eulerCharacteristic ||
+          topology.surfaceComponents !== s.surfaceComponents || restored.triangles.length !== source.triangles.length ||
+          restored.vertices.length !== source.vertices.length || error > 1e-5 ||
+          Math.abs(topology.surfaceAreaMm2 - s.surfaceAreaMm2) / s.surfaceAreaMm2 > 1e-5) throw new Error(format.name + ' round trip changed geometry or topology');
+      restored.vertices.forEach(function (point, i) {
+        point.forEach(function (value, d) {
+          if (Math.abs(value - source.vertices[i][d]) > Math.max(1e-12, Math.abs(source.vertices[i][d]) * 1e-6)) throw new Error(format.name + ' vertex mismatch');
+        });
+      });
+      maximum = Math.max(maximum, error);
+      return { name: format.name, pass: true, triangles: topology.triangleCount, volumeMm3: topology.volumeMm3,
+        relativeVolumeError: error, bytes: format.payload.length };
+    });
+    var scad = exportOpenSCAD(grid), restoredGrid = parseOpenSCAD(scad);
+    if (restoredGrid.data.some(function (value, i) { return value !== (grid.data[i] ? 1 : 0); })) throw new Error('OpenSCAD changed occupancy');
+    results.push({ name: 'OpenSCAD', pass: true, cells: countVoxels(restoredGrid), bytes: scad.length });
+    var snapshot = deserializeGrid(serializeGrid(grid));
+    if (snapshot.data.some(function (value, i) { return value !== (grid.data[i] ? 1 : 0); })) throw new Error('project snapshot changed occupancy');
+    return { pass: true, formats: results, snapshotCells: grid.data.length, maxRelativeVolumeError: maximum };
+  }
+
   /* ------------------------------------------------------------------ */
   /* Signed distance field helpers                                       */
   /* ------------------------------------------------------------------ */
 
   function sdfBox(px, py, pz, min, size) {
+    if (!Array.isArray(min) || min.length !== 3 || !Array.isArray(size) || size.length !== 3) throw new TypeError('SDF box needs three origin and size coordinates');
+    assertGeometry([px, py, pz].concat(min, size));
+    if (size.some(function (v) { return v < 0; })) throw new RangeError('SDF box sizes must be nonnegative');
     var half = [size[0] / 2, size[1] / 2, size[2] / 2];
     var c = [min[0] + half[0], min[1] + half[1], min[2] + half[2]];
     var qx = Math.abs(px - c[0]) - half[0];
     var qy = Math.abs(py - c[1]) - half[1];
     var qz = Math.abs(pz - c[2]) - half[2];
     var outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0));
-    return outside + Math.min(Math.max(qx, qy, qz), 0);
+    var distance = outside + Math.min(Math.max(qx, qy, qz), 0);
+    assertFinite(distance, 'SDF box distance');
+    return distance;
   }
 
   function sdfSphere(px, py, pz, cx, cy, cz, radius) {
-    return Math.hypot(px - cx, py - cy, pz - cz) - radius;
+    assertGeometry([px, py, pz, cx, cy, cz]); assertPositive(radius, 'SDF sphere radius');
+    var distance = Math.hypot(px - cx, py - cy, pz - cz) - radius;
+    assertFinite(distance, 'SDF sphere distance'); return distance;
   }
 
   function sdfCylinder(px, py, pz, cx, cy, cz, radius, height, axis) {
+    assertGeometry([px, py, pz, cx, cy, cz]); assertPositive(radius, 'SDF cylinder radius'); assertPositive(height, 'SDF cylinder height');
     var a = normalizeAxis(axis);
     var u = (a + 1) % 3;
     var v = (a + 2) % 3;
@@ -780,13 +1069,17 @@
     var axial = Math.abs(point[a] - (center[a] + height / 2)) - height / 2;
     var dx = Math.max(radial, 0);
     var dy = Math.max(axial, 0);
-    return Math.min(Math.max(radial, axial), 0) + Math.hypot(dx, dy);
+    var distance = Math.min(Math.max(radial, axial), 0) + Math.hypot(dx, dy);
+    assertFinite(distance, 'SDF cylinder distance'); return distance;
   }
 
   function sdfUnion(a, b) { return Math.min(a, b); }
   function sdfSubtract(a, b) { return Math.max(a, -b); }
   function sdfIntersect(a, b) { return Math.max(a, b); }
   function sdfSmoothUnion(a, b, k) {
+    assertGeometry([a, b, k]);
+    if (k < 0) throw new RangeError('blend radius must be nonnegative');
+    if (k === 0) return Math.min(a, b);
     var h = clamp(0.5 + 0.5 * (b - a) / k, 0, 1);
     return b * (1 - h) + a * h - k * h * (1 - h);
   }
@@ -794,16 +1087,22 @@
   function rasterizeSDF(grid, sdf, operation) {
     assertGrid(grid);
     if (typeof sdf !== 'function') throw new TypeError('sdf must be a function');
+    if (operation !== undefined && operation !== 'add' && operation !== 'subtract' && operation !== 'replace') {
+      throw new RangeError('SDF operation must be add, subtract, or replace');
+    }
     var op = operation === 'subtract' ? 0 : 1;
+    var next = operation === 'replace' ? new Uint8Array(grid.data.length) : new Uint8Array(grid.data);
     var pitch = grid.pitchMm;
     for (var z = 0; z < grid.nz; z++) {
       for (var y = 0; y < grid.ny; y++) {
         for (var x = 0; x < grid.nx; x++) {
           var d = sdf((x + 0.5) * pitch, (y + 0.5) * pitch, (z + 0.5) * pitch);
-          if (d <= 0) setVoxel(grid, x, y, z, op);
+          assertFinite(d, 'sampled SDF');
+          if (d <= 0) next[indexOf(grid, x, y, z)] = op;
         }
       }
     }
+    grid.data.set(next);
     return grid;
   }
 
@@ -827,11 +1126,17 @@
     if (!snapshot || snapshot.format !== 'voxelsynth-grid-v1') {
       throw new TypeError('unsupported grid snapshot');
     }
-    var raw = typeof atob === 'function'
-      ? atob(snapshot.cells)
-      : Buffer.from(snapshot.cells, 'base64').toString('binary');
     var grid = createGrid(snapshot.nx, snapshot.ny, snapshot.nz, snapshot.pitchMm);
-    for (var i = 0; i < grid.data.length && i < raw.length; i++) grid.data[i] = raw.charCodeAt(i) === 49 ? 1 : 0;
+    var padding = (3 - grid.data.length % 3) % 3;
+    if (typeof snapshot.cells !== 'string' || snapshot.cells.length !== 4 * Math.ceil(grid.data.length / 3) ||
+        !snapshot.cells.endsWith('='.repeat(padding)) || /[^A-Za-z0-9+/]/.test(snapshot.cells.slice(0, snapshot.cells.length - padding))) {
+      throw new TypeError('snapshot cells must be complete canonical base64');
+    }
+    var raw = typeof atob === 'function' ? atob(snapshot.cells) : Buffer.from(snapshot.cells, 'base64').toString('binary');
+    if (raw.length !== grid.data.length || !/^[01]+$/.test(raw)) throw new TypeError('snapshot must contain exactly one binary occupancy character per cell');
+    var canonical = typeof btoa === 'function' ? btoa(raw) : Buffer.from(raw, 'binary').toString('base64');
+    if (canonical !== snapshot.cells) throw new TypeError('snapshot base64 is not canonical');
+    for (var i = 0; i < grid.data.length; i++) grid.data[i] = raw.charCodeAt(i) === 49 ? 1 : 0;
     return grid;
   }
 
@@ -842,33 +1147,41 @@
   function resolvePresetOptions(options) {
     var o = options || {};
     return {
-      pitchMm: o.pitchMm || 2,
-      nx: o.nx || 32,
-      ny: o.ny || 22,
-      nz: o.nz || 12,
-      wallMm: o.wallMm || 4,
-      compartments: o.compartments || 3
+      pitchMm: o.pitchMm === undefined ? 2 : o.pitchMm,
+      nx: o.nx === undefined ? 32 : o.nx,
+      ny: o.ny === undefined ? 22 : o.ny,
+      nz: o.nz === undefined ? 12 : o.nz,
+      wallMm: o.wallMm === undefined ? 4 : o.wallMm,
+      compartments: o.compartments === undefined ? 3 : o.compartments
     };
+  }
+
+  function assertPresetGrid(grid) {
+    if (grid.nx < 4 || grid.ny < 4 || grid.nz < 4) throw new RangeError('part presets need at least 4 cells on each axis');
   }
 
   function deskOrganizerPreset(options) {
     var o = resolvePresetOptions(options);
     var p = o.pitchMm;
     var grid = createGrid(o.nx, o.ny, o.nz, p);
+    assertPresetGrid(grid);
     var width = o.nx * p, depth = o.ny * p, height = o.nz * p;
     addBox(grid, 0, 0, 0, width, depth, height);
-    var wall = o.wallMm;
+    assertPositive(o.wallMm, 'preset wall');
+    assertPositiveInteger(o.compartments, 'compartments');
+    var wall = Math.max(1, Math.min(Math.ceil(o.wallMm / p), Math.floor(o.nx / 4), Math.floor(o.ny / 4), Math.floor(o.nz / 2))) * p;
+    o.compartments = Math.max(1, Math.min(o.compartments, Math.floor((width - wall) / (2 * wall))));
     var floor = wall;
     var top = height + p;
     var usable = width - wall * (o.compartments + 1);
-    var bay = Math.floor(usable / o.compartments);
+    var bay = Math.floor(usable / (o.compartments * p)) * p;
     for (var i = 0; i < o.compartments; i++) {
       var x0 = wall + i * (bay + wall);
       var w = i === o.compartments - 1 ? (width - wall - x0) : bay;
       subtractBox(grid, x0, wall, floor, w, depth - 2 * wall, top - floor);
     }
     var penR = Math.max(p, wall * 0.6);
-    for (var j = 0; j < 3; j++) {
+    for (var j = 0; j < o.compartments; j++) {
       subtractCylinder(grid, wall + bay * 0.5 + j * (bay + wall), depth * 0.5, floor,
         penR, height - floor + p, 'z');
     }
@@ -877,13 +1190,15 @@
 
   function sdCardVaultPreset(options) {
     var o = options || {};
-    var p = o.pitchMm || 1.5;
-    var nx = o.nx || 24, ny = o.ny || 18, nz = o.nz || 10;
+    var p = o.pitchMm === undefined ? 1.5 : o.pitchMm;
+    var nx = o.nx === undefined ? 24 : o.nx, ny = o.ny === undefined ? 18 : o.ny, nz = o.nz === undefined ? 10 : o.nz;
     var grid = createGrid(nx, ny, nz, p);
+    assertPresetGrid(grid);
     var width = nx * p, depth = ny * p, height = nz * p;
     addBox(grid, 0, 0, 0, width, depth, height);
-    shellGrid(grid, o.wallMm || 3);
-    var slotW = o.slotWidthMm || width * 0.55;
+    shellGrid(grid, o.wallMm === undefined ? 3 : o.wallMm);
+    var slotW = o.slotWidthMm === undefined ? width * 0.55 : o.slotWidthMm;
+    assertPositive(slotW, 'slot width');
     subtractBox(grid, (width - slotW) / 2, depth * 0.25, height - 2 * p,
       slotW, depth * 0.5, 4 * p);
     addBox(grid, p, p, 0, width - 2 * p, depth - 2 * p, p * 1.5);
@@ -893,18 +1208,21 @@
 
   function cableCombPreset(options) {
     var o = options || {};
-    var p = o.pitchMm || 1.5;
-    var nx = o.nx || 30, ny = o.ny || 10, nz = o.nz || 12;
+    var p = o.pitchMm === undefined ? 1.5 : o.pitchMm;
+    var nx = o.nx === undefined ? 30 : o.nx, ny = o.ny === undefined ? 10 : o.ny, nz = o.nz === undefined ? 12 : o.nz;
     var grid = createGrid(nx, ny, nz, p);
+    assertPresetGrid(grid);
     var width = nx * p, depth = ny * p, height = nz * p;
-    var channels = o.channels || 6;
+    var channels = o.channels === undefined ? 6 : o.channels;
+    assertPositiveInteger(channels, 'channels');
+    channels = Math.min(channels, Math.max(1, Math.floor(nx / 3)));
     addBox(grid, 0, 0, 0, width, depth, height);
     var pitch = width / (channels + 0.5);
     var slotW = Math.max(p * 2, pitch * 0.55);
     for (var i = 0; i < channels; i++) {
       var cx = pitch * (i + 0.75);
       subtractBox(grid, cx - slotW / 2, p, height * 0.35, slotW, depth - 2 * p, height);
-      subtractCylinder(grid, cx, depth * 0.5, height * 0.35, slotW * 0.52, depth - 2 * p, 'y');
+      if (depth > 2 * p) subtractCylinder(grid, cx, p, height * 0.35, slotW * 0.52, depth - 2 * p, 'y');
     }
     subtractCylinder(grid, p * 2, depth * 0.5, 0, p, height, 'z');
     subtractCylinder(grid, width - p * 2, depth * 0.5, 0, p, height, 'z');
@@ -913,22 +1231,39 @@
 
   function rpiPicoMountPreset(options) {
     var o = options || {};
-    var p = o.pitchMm || 1.5;
-    var nx = o.nx || 36, ny = o.ny || 16, nz = o.nz || 8;
+    var p = o.pitchMm === undefined ? 1.5 : o.pitchMm;
+    var nx = o.nx === undefined ? 36 : o.nx, ny = o.ny === undefined ? 16 : o.ny, nz = o.nz === undefined ? 8 : o.nz;
     var grid = createGrid(nx, ny, nz, p);
+    assertPresetGrid(grid);
     var width = nx * p, depth = ny * p, height = nz * p;
-    var rail = p * 2;
+    var rail = Math.min(p * 2, width / 4);
     addBox(grid, 0, 0, 0, width, depth, p * 2);
     addBox(grid, 0, 0, 0, rail, depth, height * 0.6);
     addBox(grid, width - rail, 0, 0, rail, depth, height * 0.6);
     var holeR = p * 1.1;
-    var insetX = p * 4, insetY = p * 3;
+    var insetX = Math.min(p * 4, width / 3), insetY = Math.min(p * 3, depth / 3);
+    subtractBox(grid, rail, p, p * 2, Math.max(0, width - 2 * rail), Math.max(0, depth - 2 * p), height);
     [[insetX, insetY], [width - insetX, insetY],
      [insetX, depth - insetY], [width - insetX, depth - insetY]].forEach(function (pair) {
       addCylinder(grid, pair[0], pair[1], 0, holeR * 2.1, height * 0.55, 'z');
       subtractCylinder(grid, pair[0], pair[1], 0, holeR, height, 'z');
     });
-    subtractBox(grid, rail, p, p * 2, width - 2 * rail, depth - 2 * p, height);
+    return grid;
+  }
+
+  function sdfDockPreset(options) {
+    var o = resolvePresetOptions(options), p = o.pitchMm;
+    var grid = createGrid(o.nx, o.ny, o.nz, p);
+    assertPresetGrid(grid);
+    var width = grid.nx * p, depth = grid.ny * p, height = grid.nz * p;
+    var radius = Math.min(width, depth, height) * 0.38;
+    rasterizeSDF(grid, function (x, y, z) {
+      var base = sdfBox(x, y, z, [p, p, 0], [Math.max(p, width - 2 * p), Math.max(p, depth - 2 * p), 2 * p]);
+      var collar = sdfSphere(x, y, z, width / 2, depth / 2, height * 0.42, radius);
+      var body = sdfSmoothUnion(base, collar, 2 * p);
+      var bore = sdfCylinder(x, y, z, width / 2, depth / 2, 2 * p, radius * 0.6, height, 'z');
+      return sdfSubtract(sdfIntersect(body, z - height * 0.58), bore);
+    }, 'replace');
     return grid;
   }
 
@@ -936,17 +1271,20 @@
     deskOrganizer: deskOrganizerPreset,
     sdCardVault: sdCardVaultPreset,
     cableComb: cableCombPreset,
-    rpiPicoMount: rpiPicoMountPreset
+    rpiPicoMount: rpiPicoMountPreset,
+    sdfDock: sdfDockPreset
   };
 
   function listPresets() { return Object.keys(PRESETS); }
   function loadPreset(name, options) {
-    if (!PRESETS[name]) throw new RangeError('unknown preset: ' + name);
+    if (!Object.prototype.hasOwnProperty.call(PRESETS, name)) throw new RangeError('unknown preset: ' + name);
     return PRESETS[name](options);
   }
 
   var api = {
-    version: '1.0.0',
+    version: '2.0.0',
+    MAX_GRID_CELLS: MAX_GRID_CELLS,
+    MAX_MESH_TRIANGLES: MAX_MESH_TRIANGLES,
     DEFAULT_PLA_DENSITY: DEFAULT_PLA_DENSITY,
     DEFAULT_PETG_DENSITY: DEFAULT_PETG_DENSITY,
     AXIS_NAMES: AXIS_NAMES,
@@ -977,18 +1315,25 @@
     sdfSmoothUnion: sdfSmoothUnion,
     rasterizeSDF: rasterizeSDF,
     extractManifoldMesh: extractManifoldMesh,
+    analyzeMesh: analyzeMesh,
     estimateMass: estimateMass,
     buildQuads: buildQuads,
     exportAsciiSTL: exportAsciiSTL,
     exportBinarySTL: exportBinarySTL,
     exportOBJ: exportOBJ,
     exportOpenSCAD: exportOpenSCAD,
+    parseAsciiSTL: parseAsciiSTL,
+    parseBinarySTL: parseBinarySTL,
+    parseOBJ: parseOBJ,
+    parseOpenSCAD: parseOpenSCAD,
+    verifyExports: verifyExports,
     serializeGrid: serializeGrid,
     deserializeGrid: deserializeGrid,
     deskOrganizerPreset: deskOrganizerPreset,
     sdCardVaultPreset: sdCardVaultPreset,
     cableCombPreset: cableCombPreset,
     rpiPicoMountPreset: rpiPicoMountPreset,
+    sdfDockPreset: sdfDockPreset,
     listPresets: listPresets,
     loadPreset: loadPreset,
     presets: PRESETS

@@ -1,93 +1,136 @@
 # VoxelSynth
 
-VoxelSynth is an offline integer-lattice constructive solid geometry (CSG) and signed distance field (SDF) CAD workstation built for 3D printable enclosures, cable combs, and PCB mounting fixtures. It constructs watertight manifold triangle meshes on a shared discrete lattice, verifies directed half-edge pairing and Euler characteristic in real time, and exports ASCII STL, Binary STL, Wavefront OBJ, and greedy cuboid-merged OpenSCAD scripts.
+**Shape. Inspect. Manufacture.** A local CAD studio that turns an editable voxel lattice into useful parts and checks the geometry before it leaves your browser.
 
-All computation runs locally in plain HTML, CSS, and JavaScript with zero runtime dependencies, zero build steps, and zero network requests.
+[Open the studio](https://aariv.me/voxelsynth/) | [Submission story](DEVPOST_UPGRADE.md)
 
-Live workstation: https://aariv.me/voxelsynth/
+Pick a desk organizer, card vault, cable comb, board fixture or blended SDF sensor dock. Edit it with constructive solid geometry, inspect a layer, test the surface topology and export STL, OBJ or OpenSCAD. Every operation runs in plain browser JavaScript. There are no accounts, uploads, runtime packages, remote fonts or build steps.
 
-## Repository Structure
+## A quick judging path
 
-| File | Responsibility |
+1. Click **Board fixture**. Four raised standoffs and four open bores are real geometry. The live readout reports total genus 4.
+2. Click **SDF sensor dock** to compare a smooth-union distance field sampled onto the same inspectable lattice.
+3. Hover the XY layer inset to read integer cell coordinates and physical cell centers. Click a cell, then **Undo**.
+4. Press **Verify all 4 export formats**. Independent readers reparse three mesh formats, reconstruct OpenSCAD occupancy and restore project JSON.
+5. Download **Binary STL** or **Save project**. Open the JSON later to recover every cell and its pitch.
+
+The showcase buttons load complete designs directly. The part recipe selector can regenerate a design at a custom resolution.
+
+## What the studio contains
+
+| Workflow | Implemented behavior |
 | --- | --- |
-| `voxel.js` | UMD geometry engine: integer lattice, CSG boolean ops, SDF evaluators, 6-direction greedy quad mesher, half-edge verifier, and exporters |
-| `index.html` | Three-column engineering CAD & slicer workstation markup |
-| `style.css` | Architectural warm-gray vellum sheet and dark charcoal CAD theme plus print stylesheet |
-| `app.js` | Orthographic isometric canvas renderer, build-plate cage, 2D Z-slice cross-section inspector HUD, picking, and export handlers |
-| `test.js` | 64 `node:test` assertions covering CSG, SDFs, greedy meshing, topology invariants, and file exporters |
-| `ui-test.js` | Headless DOM smoke test verifying every control, keybind, preset, and export action |
-| `LICENSE` | MIT License |
+| Build | Box, cylinder and sphere unions or differences in cell units; mirror X/Y; minimum wall shell erosion |
+| Inspect | Orthographic orbit, top/front/isometric views, wireframe, layer plane, clipping above a layer, editable XY inset, physical coordinate readouts |
+| Recover | 32 geometry revisions with undo/redo; project JSON save/open; failed edits and imports preserve the current geometry |
+| Verify | Counted edge incidences, directed winding, connected vertex link cycles, surface components, Euler characteristic, total genus, area and volume |
+| Export | ASCII STL, binary STL, indexed OBJ and cuboid-merged OpenSCAD; every download is reparsed before delivery |
+| Access | Focusable canvas, direct X/Y/Z cell editor, keyboard edits, visible focus, live status, large touch targets and reduced motion preferences |
+| Display | Responsive layouts with the viewport first on narrow screens; light and dark themes; CSS-pixel drawing with a DPI-scaled backing store |
 
-## Running Locally
+Empty lattices and point or edge contacts keep project save available and disable manufacturing exports. The diagnostics identify why the surface needs an edit.
 
-Open `index.html` directly from disk or serve the directory over HTTP:
+## Verified showcase geometry
+
+These numbers were computed from the engine's default presets on 2026-11-15. All five pass counted edge and vertex link verification. The four manufacturing formats and project occupancy round trip for every row.
+
+| Scenario | Grid / pitch mm | Solid cells | Export triangles | Volume mm3 | Total genus | OpenSCAD cuboids |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Desk organizer | 32 x 22 x 12 / 2 | 4,128 | 8,528 | 33,024 | 0 | 9 |
+| Card vault | 24 x 18 x 10 / 1.5 | 2,380 | 5,040 | 8,032.5 | 1 | 12 |
+| Cable comb | 30 x 10 x 12 / 1.5 | 2,404 | 5,552 | 8,113.5 | 2 | 26 |
+| Board fixture | 36 x 16 x 8 / 1.5 | 1,408 | 3,472 | 4,752 | 4 | 26 |
+| SDF sensor dock | 32 x 22 x 12 / 2 | 1,396 | 3,424 | 11,173 | 0 | 31 |
+
+The desk organizer's binary STL is exactly 426,484 bytes: an 84-byte header plus 8,528 records of 50 bytes. OpenSCAD represents its 4,128 occupied cells with nine disjoint cuboids. The measured relative volume difference after default preset mesh round trips is zero at the stored precision.
+
+## Run it
+
+Open [index.html](index.html) directly in a modern browser, or host these files with GitHub Pages. The entry point uses relative local asset paths and works at `https://aariv.me/voxelsynth/`.
+
+Node.js is needed only for tests and programmatic use. The browser needs no installation.
 
 ```sh
-python3 -m http.server 8000
-# open http://localhost:8000/
+node --test test.js export-test.js ui-test.js
 ```
 
-Run the automated test suite and headless UI smoke check with Node.js:
+Current verified result: **173 tests, 173 passed, 0 failed, 0 skipped**. Tests use Node builtins only.
 
-```sh
-node --test test.js
-# tests 64 | pass 64 | fail 0
+| Suite | Command | Verified result |
+| --- | --- | --- |
+| Engine | `node --test test.js` | 103 passed, 0 failed |
+| File schemas and precision | `node --test export-test.js` | 35 passed, 0 failed |
+| DOM and interaction | `node --test ui-test.js` | 35 passed, 0 failed |
+| Full suite | `node --test test.js export-test.js ui-test.js` | 173 passed, 0 failed |
 
-node ui-test.js
-# UI smoke test passed.
-```
+The engine suite checks all 256 occupancy masks of a 2 x 2 x 2 block, exact center-sampling boundaries, singular contacts, cavities, translations, malformed input and a 2,000,000-cell project snapshot. Format tests check complete STL facets, binary length and little endian records, OBJ index bounds, balanced OpenSCAD structure, disjoint cuboid coverage and pitches from 0.000001 to 1,000,000 mm.
 
-## Programmatic Usage (Node.js & Browser)
+The DOM suite executes the actual page scripts in a strict `node:vm` browser contract built from `index.html`. It exercises every action button, five presets, undo/redo, imports, clipboard failure, high DPI picking, resize, keyboard focus and multiple pointers, with zero recorded console or reference errors. Every repository JavaScript file and any inline page script is compiled as part of the suite. These are automated DOM and geometry checks; no physical print or external slicer run is claimed.
+
+## Geometry and verification
+
+### Integer occupancy and center sampling
+
+A `Uint8Array` stores `nx * ny * nz` occupancy values at `x + nx * (y + ny * z)`. Physical cell centers are `((x + 0.5) * pitchMm, (y + 0.5) * pitchMm, (z + 0.5) * pitchMm)`.
+
+Box ranges include a center at the minimum and exclude a center at the maximum. Sphere and cylinder radial boundaries are closed; cylinder height is half open. Invalid coordinates and negative dimensions fail before changing cells. Grid booleans require equal physical pitch. Shelling uses `ceil(wallMm / pitchMm)` rounds of six-neighbor erosion and stops at the available solid depth.
+
+### SDF construction
+
+Analytic box, sphere and cylinder fields compose with union, subtraction, intersection or polynomial smooth union. A zero blend radius becomes an ordinary union. The SDF dock uses a blended base and spherical collar, a cylindrical bore and a planar rim. `rasterizeSDF` samples the field transactionally: a failed or nonfinite sample leaves the old grid intact.
+
+### Greedy masks and shared surface vertices
+
+Six face directions cull internal faces and merge coplanar masks into greedy quads. Export triangles subdivide these quads on the shared unit lattice. This prevents long greedy edges from introducing T junctions. The quad count measures coplanar compression; the triangle culling ratio compares output triangles to 12 triangles per occupied cell. Export triangles are not claimed to be two triangles per merged quad.
+
+### A stronger manifold certificate
+
+Each undirected edge must have exactly two incidences with opposite direction. Every vertex link must be one connected cycle. The second condition detects point contacts that can pass ordinary edge pairing; counted incidences detect edge contacts hidden by a Set.
+
+For closed surface components, `chi = V - E + F` and total genus is `(2 * componentCount - chi) / 2`. Inner cavity surfaces count as separate surface components. Area comes from triangle cross products. Volume uses the divergence theorem with a nearby reference and compensated summation to reduce cancellation. It is compared against `solidCellCount * pitchMm^3`.
+
+### Export contracts
+
+ASCII STL and OBJ retain the JavaScript double's round-trip numeric representation. Binary STL writes little endian float32 records and refuses a facet if conversion would collapse it. OBJ uses positive `v//vn` indices and one unit face normal per triangle. OpenSCAD merges disjoint rectangles across consecutive Z slices into cuboids and writes a balanced module and union.
+
+Independent readers validate the subset the studio writes. `verifyExports(grid)` checks every mesh vertex, facet count, topology, area and volume, then reconstructs all OpenSCAD cells and project occupancy. Its maximum accepted relative mesh volume difference is `1e-5`; the fractional-pitch and extreme-pitch tests use that bound.
+
+## Programmatic use
 
 ```js
 const V = require('./voxel.js');
-const fs = require('node:fs');
 
-const grid = V.deskOrganizerPreset({
-  pitchMm: 2, nx: 32, ny: 22, nz: 12, wallMm: 4, compartments: 3
-});
+const grid = V.loadPreset('rpiPicoMount');
+const mesh = V.extractManifoldMesh(grid, { infillPercent: 25 });
+const check = V.verifyExports(grid);
 
-const mesh = V.extractManifoldMesh(grid, { infillPercent: 20 });
-console.log(mesh.stats.watertight);      // true (0 unmatched directed half-edges)
-console.log(mesh.stats.volumeCm3);       // enclosed volume via divergence theorem (cm3)
-console.log(mesh.stats.plaMassG);        // estimated PLA filament mass (g)
+console.log(mesh.stats.watertight);       // true
+console.log(mesh.stats.genusEstimate);    // 4
+console.log(V.estimateMass(mesh).grams);   // inherits 25% infill
+console.log(check.formats.length);        // 4
 
-fs.writeFileSync('organizer.stl', V.exportAsciiSTL(mesh, 'organizer'));
-fs.writeFileSync('organizer.obj', V.exportOBJ(mesh, 'organizer'));
-fs.writeFileSync('organizer.scad', V.exportOpenSCAD(grid));
+const stlBytes = V.exportBinarySTL(mesh, 'board_fixture');
+const project = V.serializeGrid(grid);
+const recovered = V.deserializeGrid(project);
 ```
 
-## Geometric & Topological Architecture
+The UMD engine exposes `window.VoxelSynth` in classic browser scripts. `window.VoxelSynthStudio.snapshot()`, `.inspect()` and `.importText()` provide a small workspace integration API.
 
-### 1. Flat Uint8Array Lattice & 6-Neighbour Shell Erosion
+## Practical limits
 
-A lattice of `nx * ny * nz` cells with voxel pitch `pitchMm` is stored in a flat `Uint8Array` indexed by `x + nx * (y + ny * z)`. Boolean operations (`addBox`, `subtractBox`, `addCylinder`, `subtractCylinder`, `addSphere`, `subtractSphere`, `mirrorGrid`, `unionGrid`, `subtractGrid`) evaluate cell centers at `((x + 0.5) * pitchMm, (y + 0.5) * pitchMm, (z + 0.5) * pitchMm)`. `shellGrid(grid, wallMm)` performs `round(wallMm / pitchMm)` passes of 6-neighbour morphological erosion on the solid set and subtracts the surviving interior core from the original solid, leaving a closed shell of uniform wall thickness.
+The editor supports up to 48 x 48 x 32 cells. The engine caps allocation at 2,000,000 cells and accepts pitch from 0.000001 to 1,000,000 mm. Surface extraction is capped at 250,000 triangles before mesh allocation. An overly complex edit or import preserves the current part and history. Part recipes require at least four cells per axis. Imported project files are limited to 1 MB and the editor dimensions; their declared occupancy length, base64 representation and binary characters are checked exactly.
 
-### 2. Analytic Signed Distance Fields (SDF)
+Voxel resolution controls dimensional accuracy. Curves are stepped surfaces, six-neighbor shells are a discrete morphology, and fixture recipes are design starting points rather than certified hardware fits. Measure a specific board and choose an appropriate pitch before fabrication. The material estimate is volume x infill x density; slicer walls, supports, toolpaths and print time are not simulated.
 
-For smooth fillets and blended booleans, `sdfBox`, `sdfSphere`, and `sdfCylinder` evaluate exact signed distances in millimetres. Combinators `sdfUnion`, `sdfSubtract`, `sdfIntersect`, and polynomial `sdfSmoothUnion(a, b, k)` compose arbitrary implicit surfaces that `rasterizeSDF(grid, fn, op)` samples across the lattice.
+## Files
 
-### 3. Greedy Coplanar Quad Meshing Without T-Junctions
-
-For each of the six principal axis directions (`+X, -X, +Y, -Y, +Z, -Z`), `buildQuads(grid)` extracts a 2D binary mask of solid voxels whose face neighbour in that direction is empty air. Internal faces between adjacent solid voxels are culled immediately. A greedy 2D sweep expands each exposed face into a maximal coplanar rectangle `[u0..u1, v0..v1]`, reducing flat walls to a handful of quads.
-
-In a naive greedy mesher, triangulating each merged rectangle directly with two long triangles creates T-junctions wherever a long quad edge borders smaller neighbouring quads. Slicers such as PrusaSlicer and Cura flag T-junctions as non-manifold open edges. VoxelSynth resolves this by recording the greedy quad count and then emitting triangles on the shared integer vertex lattice so every unit boundary segment shares identical vertex indices with its neighbour across corners and steps. A defensive signed-volume pass checks the divergence-theorem volume over all triangles and flips winding if negative.
-
-### 4. Half-Edge Manifold Verification & Euler Characteristic
-
-`extractManifoldMesh` verifies that every directed triangle edge `u -> v` has an exact opposite partner `v -> u` in the mesh. The diagnostics table reports:
-
-- **Unmatched directed edges:** must equal `0` for `watertight = true`.
-- **Surface area (`mm2`) & Enclosed volume (`cm3`):** computed directly from triangle cross products and the divergence theorem `sum(a . (b x c)) / 6`, matching `voxelCount * pitchMm^3`.
-- **Euler characteristic (`chi = V - E + F`) & Genus estimate (`g = (2 - chi) / 2`):** calculated from unique vertices `V`, undirected edges `E`, and triangle count `F`.
-- **PLA (`1.24 g/cm3`) and PETG (`1.27 g/cm3`) filament mass:** scaled by enclosed volume and infill percentage.
-
-### 5. Exporters & OpenSCAD Cuboid Compression
-
-- `exportAsciiSTL(mesh, name)` and `exportBinarySTL(mesh, name)` (80-byte header + uint32 facet count + 50-byte little-endian records).
-- `exportOBJ(mesh, name)` with indexed `v`, `vn`, and `f v//vn` records.
-- `exportOpenSCAD(grid, pitchMm)` merges each Z slice into maximal 2D rectangles and extrudes identical rectangles across consecutive Z layers into compact `translate(...) cube(...)` primitives inside a `union()`. For the default Desk Organizer preset, 4,128 solid voxels compress into 9 `cube()` statements.
-
-## License
+| File | Responsibility |
+| --- | --- |
+| [voxel.js](voxel.js) | Validated lattice, CSG, SDFs, surface extraction, topology, format writers/readers and project serialization |
+| [app.js](app.js) | Renderer, DPI resizing, inspection, recoverable edits, keyboard navigation and checked export delivery |
+| [index.html](index.html), [style.css](style.css) | Local studio, responsive hierarchy, accessible controls and themes |
+| [test.js](test.js) | 103 engine tests |
+| [export-test.js](export-test.js) | 35 format and precision tests |
+| [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 35 UI tests and the strict page contract |
 
 MIT. See [LICENSE](LICENSE).

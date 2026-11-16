@@ -13,22 +13,23 @@ watertight STL, OBJ, and OpenSCAD export.
   libraries. Node builtins and the `node:test` runner are fine.
 - Keep the workstation offline. No network requests, no CDN assets, no
   analytics.
-- Watertightness is the core contract. Every exported mesh must remain a
-  closed 2-manifold: each directed edge must have exactly one opposite, and the
-  Euler characteristic must hold. Never merge code that weakens that invariant.
+- Manufacturing downloads require a nonempty manifold: exactly two oppositely
+  directed incidences per edge and one connected cycle in every vertex link.
+  The geometry API can expose singular meshes for inspection, but their
+  diagnostics must identify contacts and never certify them as manifold.
 
 ## Development setup
 
 Requirements:
 
-- Node.js 22 or newer (the test runner is `node --test`)
+- Node.js 18 or newer (the test runner is `node --test test.js export-test.js ui-test.js`)
 - A modern browser for manual verification
 - Optional: OpenSCAD or a slicer to confirm exports print
 
 ```sh
 git clone https://github.com/draarivpatel-ui/voxelsynth.git
 cd voxelsynth
-node --test
+node --test test.js export-test.js ui-test.js
 ```
 
 To open the workstation locally:
@@ -43,14 +44,15 @@ python3 -m http.server 8000
 | File | Role |
 | --- | --- |
 | `voxel.js` | The geometry core: lattice grid, SDF evaluation, CSG boolean ops, mesh generation, and exporters |
-| `ui-test.js` | A headless DOM smoke test that drives the workspace through a stubbed document |
+| `ui-test.js`, `dom-harness.js` | Named DOM behavior tests and the strict browser contract |
+| `export-test.js` | Format schema, precision and round-trip regression tests |
 | `app.js` | UI wiring: viewport, controls, view modes, and export buttons |
 | `index.html`, `style.css` | The workstation shell and its styling |
 | `test.js` | The unit test suite for the geometry core |
 
-Note that the Node test runner's default discovery also picks up `ui-test.js`
-because it ends in `-test.js`. Keep that in mind when adding test files, and run
-`node --test` to execute both the unit suite and the smoke test.
+The explicit full command runs engine, export schema and DOM behavior suites.
+Use `dom-harness.js` for new interaction regressions; do not invent missing
+page nodes or replace unsupported canvas methods with silent no-op proxies.
 
 `voxel.js` is a UMD module, so `require('./voxel.js')` works in Node and
 `window.VoxelSynth` is available in the browser. Match that pattern in new
@@ -81,7 +83,7 @@ pins the resulting topology.
 
 1. Fork the repository and create a branch from `main`.
 2. Make your change with tests, including manifold checks for geometry work.
-3. Run the full suite locally: `node --test`.
+3. Run the full suite locally: `node --test test.js export-test.js ui-test.js`.
 4. Update documentation where behaviour, file formats, or defaults changed.
 5. Open the PR against `main` with:
    - a short summary of what changed and why,

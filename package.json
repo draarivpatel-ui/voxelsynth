@@ -1,12 +1,13 @@
 {
   "name": "voxelsynth",
-  "version": "1.0.0",
-  "description": "Offline parametric voxel and SDF CSG CAD studio with watertight STL, OBJ, and OpenSCAD export",
+  "version": "2.0.0",
+  "description": "Local voxel and signed distance field CAD studio with counted mesh topology and verified STL, OBJ and OpenSCAD round trips",
   "main": "voxel.js",
   "scripts": {
-    "test": "node --test test.js && node ui-test.js",
-    "test:core": "node --test test.js",
-    "test:ui": "node ui-test.js"
+    "test": "node --test --test-reporter=spec test.js export-test.js ui-test.js",
+    "test:core": "node --test --test-reporter=spec test.js",
+    "test:exports": "node --test --test-reporter=spec export-test.js",
+    "test:ui": "node --test --test-reporter=spec ui-test.js"
   },
   "keywords": [
     "voxel",
