@@ -1,85 +1,355 @@
 [
-  { "do": "at", "s": 0.0 },
-  { "do": "eval", "js": "window.scrollTo(0, 300)" },
-  { "do": "move", "selector": "#health-badge", "ms": 900 },
-  { "do": "move", "selector": "#metric-topology", "ms": 900 },
-
-  { "do": "at", "s": 20.0 },
-  { "do": "eval", "js": "window.scrollTo(0, 0)" },
-  { "do": "move", "selector": "[data-showcase='deskOrganizer']", "ms": 900 },
-  { "do": "eval", "js": "window.scrollTo(0, 640)" },
-  { "do": "move", "selector": "#diag-body", "ms": 900 },
-
-  { "do": "at", "s": 33.4 },
-  { "do": "eval", "js": "window.scrollTo(0, 0)" },
-  { "do": "move", "selector": "[data-showcase='sdfDock']", "ms": 700 },
-  { "do": "click", "selector": "[data-showcase='sdfDock']", "ms": 600 },
-  { "do": "eval", "js": "window.scrollTo(0, 640)" },
-  { "do": "move", "selector": "#health-badge", "ms": 900 },
-
-  { "do": "at", "s": 43.9 },
-  { "do": "eval", "js": "window.scrollTo(0, 0)" },
-  { "do": "click", "selector": "#art-mode-toggle", "ms": 700 },
-  { "do": "move", "selector": "#art-plate-badge", "ms": 700 },
-
-  { "do": "at", "s": 49.2 },
-  { "do": "move", "selector": "[data-sculpture='gyroidPavilion']", "ms": 700 },
-  { "do": "click", "selector": "[data-sculpture='gyroidPavilion']", "ms": 600 },
-  { "do": "move", "selector": "#art-metric-triangles", "ms": 700 },
-
-  { "do": "at", "s": 54.4 },
-  { "do": "eval", "js": "window.scrollTo(0, 0)" },
-  { "do": "click", "selector": "#lighting-toggle", "ms": 700 },
-  { "do": "click", "selector": "#turntable-toggle", "ms": 700 },
-  { "do": "move", "selector": "#art-plate-title", "ms": 1000 },
-
-  { "do": "at", "s": 64.9 },
-  { "do": "move", "selector": "[data-sculpture='mengerLantern']", "ms": 700 },
-  { "do": "click", "selector": "[data-sculpture='mengerLantern']", "ms": 600 },
-  { "do": "move", "selector": "#art-metric-voxels", "ms": 700 },
-  { "do": "move", "selector": "#art-metric-triangles", "ms": 700 },
-  { "do": "move", "selector": "#art-plate-badge", "ms": 700 },
-
-  { "do": "at", "s": 80.8 },
-  { "do": "move", "selector": "[data-sculpture='helicalRibbon']", "ms": 700 },
-  { "do": "click", "selector": "[data-sculpture='helicalRibbon']", "ms": 600 },
-  { "do": "move", "selector": "#art-metric-triangles", "ms": 700 },
-  { "do": "click", "selector": "[data-sculpture='voronoiAmphitheater']", "ms": 600 },
-  { "do": "move", "selector": "#art-metric-voxels", "ms": 900 },
-
-  { "do": "at", "s": 92.0 },
-  { "do": "move", "selector": "#art-statement summary", "ms": 700 },
-  { "do": "click", "selector": "#art-statement summary", "ms": 600 },
-  { "do": "move", "selector": ".art-statement-body", "ms": 1400 },
-  { "do": "click", "selector": "#art-statement summary", "ms": 600 },
-  { "do": "move", "selector": "#art-export-plate", "ms": 900 },
-
-  { "do": "at", "s": 104.8 },
-  { "do": "click", "selector": "#art-mode-toggle", "ms": 700 },
-  { "do": "move", "selector": "#lighting-toggle", "ms": 700 },
-  { "do": "eval", "js": "window.scrollTo(0, 260)" },
-
-  { "do": "at", "s": 109.0 },
-  { "do": "eval", "js": "window.scrollTo(0, 0)" },
-  { "do": "click", "selector": "[data-showcase='rpiPicoMount']", "ms": 700 },
-  { "do": "eval", "js": "window.scrollTo(0, 640)" },
-  { "do": "move", "selector": "#diag-body", "ms": 900 },
-  { "do": "slide", "selector": "#slice", "to": 4, "ms": 1200 },
-  { "do": "move", "selector": "#hover-readout", "ms": 700 },
-
-  { "do": "at", "s": 123.1 },
-  { "do": "eval", "js": "window.scrollTo(0, 1150)" },
-  { "do": "move", "selector": "#verify-exports", "ms": 700 },
-  { "do": "click", "selector": "#verify-exports", "ms": 600 },
-  { "do": "move", "selector": "#verification-result", "ms": 800 },
-  { "do": "move", "selector": "#health-badge", "ms": 700 },
-
-  { "do": "at", "s": 131.5 },
-  { "do": "eval", "js": "window.scrollTo(0, 0)" },
-  { "do": "click", "selector": "#art-mode-toggle", "ms": 700 },
-  { "do": "move", "selector": "[data-sculpture='gyroidPavilion']", "ms": 700 },
-  { "do": "click", "selector": "[data-sculpture='gyroidPavilion']", "ms": 600 },
-  { "do": "move", "selector": "#art-plate-title", "ms": 900 },
-
-  { "do": "wait", "ms": 4000 }
+  {
+    "do": "at",
+    "s": 0.0
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 300)"
+  },
+  {
+    "do": "move",
+    "selector": "#health-badge",
+    "ms": 900
+  },
+  {
+    "do": "move",
+    "selector": "#metric-topology",
+    "ms": 900
+  },
+  {
+    "do": "at",
+    "s": 20.0
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 0)"
+  },
+  {
+    "do": "move",
+    "selector": "[data-showcase='deskOrganizer']",
+    "ms": 900
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 640)"
+  },
+  {
+    "do": "move",
+    "selector": "#diag-body",
+    "ms": 900
+  },
+  {
+    "do": "at",
+    "s": 33.4
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 0)"
+  },
+  {
+    "do": "move",
+    "selector": "[data-showcase='sdfDock']",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "[data-showcase='sdfDock']",
+    "ms": 600
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 640)"
+  },
+  {
+    "do": "move",
+    "selector": "#health-badge",
+    "ms": 900
+  },
+  {
+    "do": "at",
+    "s": 43.9
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 0)"
+  },
+  {
+    "do": "click",
+    "selector": "#art-mode-toggle",
+    "ms": 700
+  },
+  {
+    "do": "move",
+    "selector": "#art-plate-badge",
+    "ms": 700
+  },
+  {
+    "do": "at",
+    "s": 49.2
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 230)"
+  },
+  {
+    "do": "move",
+    "selector": "[data-sculpture='gyroidPavilion']",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "[data-sculpture='gyroidPavilion']",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": "#art-metric-triangles",
+    "ms": 700
+  },
+  {
+    "do": "at",
+    "s": 54.4
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 0)"
+  },
+  {
+    "do": "click",
+    "selector": "#lighting-toggle",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "#turntable-toggle",
+    "ms": 700
+  },
+  {
+    "do": "move",
+    "selector": "#art-plate-title",
+    "ms": 1000
+  },
+  {
+    "do": "at",
+    "s": 64.9
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 230)"
+  },
+  {
+    "do": "move",
+    "selector": "[data-sculpture='mengerLantern']",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "[data-sculpture='mengerLantern']",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": "#art-metric-voxels",
+    "ms": 700
+  },
+  {
+    "do": "move",
+    "selector": "#art-metric-triangles",
+    "ms": 700
+  },
+  {
+    "do": "move",
+    "selector": "#art-plate-badge",
+    "ms": 700
+  },
+  {
+    "do": "at",
+    "s": 80.8
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 230)"
+  },
+  {
+    "do": "move",
+    "selector": "[data-sculpture='helicalRibbon']",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "[data-sculpture='helicalRibbon']",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": "#art-metric-triangles",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "[data-sculpture='voronoiAmphitheater']",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": "#art-metric-voxels",
+    "ms": 900
+  },
+  {
+    "do": "at",
+    "s": 92.0
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 230)"
+  },
+  {
+    "do": "move",
+    "selector": "#art-statement summary",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "#art-statement summary",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": ".art-statement-body",
+    "ms": 1400
+  },
+  {
+    "do": "click",
+    "selector": "#art-statement summary",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": "#art-export-plate",
+    "ms": 900
+  },
+  {
+    "do": "at",
+    "s": 104.8
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 0)"
+  },
+  {
+    "do": "click",
+    "selector": "#art-mode-toggle",
+    "ms": 700
+  },
+  {
+    "do": "move",
+    "selector": "#lighting-toggle",
+    "ms": 700
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 260)"
+  },
+  {
+    "do": "at",
+    "s": 109.0
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 0)"
+  },
+  {
+    "do": "click",
+    "selector": "[data-showcase='rpiPicoMount']",
+    "ms": 700
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 640)"
+  },
+  {
+    "do": "move",
+    "selector": "#diag-body",
+    "ms": 900
+  },
+  {
+    "do": "slide",
+    "selector": "#slice",
+    "to": 4,
+    "ms": 1200
+  },
+  {
+    "do": "move",
+    "selector": "#hover-readout",
+    "ms": 700
+  },
+  {
+    "do": "at",
+    "s": 123.1
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 1150)"
+  },
+  {
+    "do": "move",
+    "selector": "#verify-exports",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "#verify-exports",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": "#verification-result",
+    "ms": 800
+  },
+  {
+    "do": "move",
+    "selector": "#health-badge",
+    "ms": 700
+  },
+  {
+    "do": "at",
+    "s": 131.5
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 0)"
+  },
+  {
+    "do": "click",
+    "selector": "#art-mode-toggle",
+    "ms": 700
+  },
+  {
+    "do": "move",
+    "selector": "[data-sculpture='gyroidPavilion']",
+    "ms": 700
+  },
+  {
+    "do": "click",
+    "selector": "[data-sculpture='gyroidPavilion']",
+    "ms": 600
+  },
+  {
+    "do": "move",
+    "selector": "#art-plate-title",
+    "ms": 900
+  },
+  {
+    "do": "eval",
+    "js": "(()=>{const l=document.getElementById('lighting-toggle'),t=document.getElementById('turntable-toggle');if(l.getAttribute('aria-pressed')!=='true')l.click();if(t.getAttribute('aria-pressed')!=='true')t.click();return window.VoxelSynthStudio.inspect();})()"
+  },
+  {
+    "do": "eval",
+    "js": "window.scrollTo(0, 230)"
+  },
+  {
+    "do": "wait",
+    "ms": 4000
+  }
 ]
