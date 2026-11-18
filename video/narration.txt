@@ -1,0 +1,11 @@
+VoxelSynth is a local CAD studio that turns an editable voxel lattice into useful parts and mathematical sculptures, then checks the geometry before it ever leaves your browser. Everything runs in plain JavaScript, with no accounts, no uploads and no dependencies.
+
+Here the desk organizer is built from real booleans and partitions. The live readout counts boundary edges and vertex links, then reports Euler characteristic, genus, area and volume. It is a closed two-manifold, and the signed distance field sensor dock samples a smooth-union blend onto the very same inspectable lattice.
+
+Sculpture mode samples four algorithmic artworks onto that lattice. The Minimalist Gyroid Pavilion is a dilated triply periodic surface. Exhibition lighting warms the palette, and the turntable orbits the gallery two degrees per tick, wrapping smoothly instead of stalling.
+
+The Menger Sponge Lantern is the standout: three thousand nine hundred and fifty four voxels, twenty two thousand nine hundred and thirty two export triangles, and total genus two hundred and forty, all reported manifold. The Helical Kinetic Ribbon twists three arms around a mast, and the Voronoi Terraced Amphitheater steps each column by distance to competing seeds.
+
+Each work carries an artist statement and a locally encoded exhibition plate, a fourteen hundred by one thousand PNG written without any network call or canvas shortcut.
+
+Switch back to CAD mode and the lighting resets cleanly. The board fixture reports genus four, layer inspection exposes exact cell centers, and the export self-check reparses three mesh formats, rebuilds OpenSCAD cells and restores project occupancy. Four formats pass, with zero relative volume error, and two hundred and one automated tests guard the whole studio. Shape, inspect, manufacture, entirely offline.

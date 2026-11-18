@@ -1,0 +1,77 @@
+[
+  { "do": "at", "s": 0.0 },
+  { "do": "scrollTo", "selector": "#workspace", "ms": 1400, "offset": 24 },
+  { "do": "move", "selector": "#metric-topology", "ms": 900 },
+  { "do": "move", "selector": "#health-badge", "ms": 1200 },
+
+  { "do": "at", "s": 20.29 },
+  { "do": "move", "selector": "[data-showcase='deskOrganizer']", "ms": 900 },
+  { "do": "move", "selector": "#diag-body", "ms": 1000 },
+
+  { "do": "at", "s": 33.81 },
+  { "do": "move", "selector": "[data-showcase='sdfDock']", "ms": 1200 },
+  { "do": "click", "selector": "[data-showcase='sdfDock']", "ms": 700 },
+  { "do": "move", "selector": "#health-badge", "ms": 1100 },
+
+  { "do": "at", "s": 44.36 },
+  { "do": "scrollTo", "selector": "#art-section", "ms": 1400, "offset": 40 },
+  { "do": "click", "selector": "#art-mode-toggle", "ms": 800 },
+  { "do": "move", "selector": "#art-plate-badge", "ms": 900 },
+
+  { "do": "at", "s": 49.54 },
+  { "do": "move", "selector": "[data-sculpture='gyroidPavilion']", "ms": 800 },
+  { "do": "click", "selector": "[data-sculpture='gyroidPavilion']", "ms": 700 },
+  { "do": "move", "selector": "#art-metric-triangles", "ms": 900 },
+
+  { "do": "at", "s": 54.72 },
+  { "do": "click", "selector": "#lighting-toggle", "ms": 800 },
+  { "do": "click", "selector": "#turntable-toggle", "ms": 800 },
+  { "do": "move", "selector": "#art-plate-title", "ms": 1200 },
+
+  { "do": "at", "s": 65.19 },
+  { "do": "move", "selector": "[data-sculpture='mengerLantern']", "ms": 700 },
+  { "do": "click", "selector": "[data-sculpture='mengerLantern']", "ms": 700 },
+  { "do": "move", "selector": "#art-metric-voxels", "ms": 900 },
+  { "do": "move", "selector": "#art-metric-triangles", "ms": 800 },
+  { "do": "move", "selector": "#art-plate-badge", "ms": 800 },
+
+  { "do": "at", "s": 81.09 },
+  { "do": "move", "selector": "[data-sculpture='helicalRibbon']", "ms": 700 },
+  { "do": "click", "selector": "[data-sculpture='helicalRibbon']", "ms": 700 },
+  { "do": "move", "selector": "#art-metric-triangles", "ms": 700 },
+  { "do": "click", "selector": "[data-sculpture='voronoiAmphitheater']", "ms": 700 },
+  { "do": "move", "selector": "#art-metric-voxels", "ms": 1100 },
+
+  { "do": "at", "s": 92.28 },
+  { "do": "move", "selector": "#art-statement summary", "ms": 800 },
+  { "do": "click", "selector": "#art-statement summary", "ms": 700 },
+  { "do": "move", "selector": ".art-statement-body", "ms": 1600 },
+  { "do": "click", "selector": "#art-statement summary", "ms": 600 },
+  { "do": "move", "selector": "#art-export-plate", "ms": 1100 },
+
+  { "do": "at", "s": 105.03 },
+  { "do": "click", "selector": "#art-mode-toggle", "ms": 800 },
+  { "do": "move", "selector": "#lighting-toggle", "ms": 800 },
+  { "do": "scrollTo", "selector": "#workspace", "ms": 1400, "offset": 24 },
+
+  { "do": "at", "s": 109.25 },
+  { "do": "click", "selector": "[data-showcase='rpiPicoMount']", "ms": 900 },
+  { "do": "move", "selector": "#diag-body", "ms": 1000 },
+  { "do": "slide", "selector": "#slice", "to": 4, "ms": 1400 },
+  { "do": "move", "selector": "#hover-readout", "ms": 800 },
+
+  { "do": "at", "s": 123.39 },
+  { "do": "scrollTo", "selector": "#verify-exports", "ms": 1400, "offset": 200 },
+  { "do": "move", "selector": "#verify-exports", "ms": 800 },
+  { "do": "click", "selector": "#verify-exports", "ms": 700 },
+  { "do": "move", "selector": "#verification-result", "ms": 900 },
+  { "do": "move", "selector": "#health-badge", "ms": 900 },
+
+  { "do": "at", "s": 131.77 },
+  { "do": "scrollTo", "selector": "#art-section", "ms": 1600, "offset": 40 },
+  { "do": "move", "selector": "[data-sculpture='gyroidPavilion']", "ms": 800 },
+  { "do": "click", "selector": "[data-sculpture='gyroidPavilion']", "ms": 700 },
+  { "do": "move", "selector": "#art-plate-title", "ms": 1100 },
+
+  { "do": "wait", "ms": 5000 }
+]
