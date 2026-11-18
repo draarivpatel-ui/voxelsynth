@@ -36,7 +36,8 @@ test('all page action buttons and canvas pointer events have persistent handlers
   clean(w);
 });
 
-for (const name of V.listPresets()) test('showcase ' + name + ' loads a complete editable manifold in one action', () => {
+const CAD_PRESETS = ['deskOrganizer', 'sdCardVault', 'cableComb', 'rpiPicoMount', 'sdfDock'];
+for (const name of CAD_PRESETS) test('showcase ' + name + ' loads a complete editable manifold in one action', () => {
   const w = createWorkspace();
   w.group('data-showcase', name).click();
   assert.equal(w.studio.inspect().stats.watertight, true);
@@ -323,4 +324,124 @@ test('extremely narrow canvas rendering keeps the projection scale positive', ()
   const w=createWorkspace(); w.resize(50,70,2);
   const polygons=w.drawCalls.filter(call=>call.method==='moveTo'||call.method==='lineTo');
   assert.ok(polygons.length>0); assert.ok(polygons.every(call=>call.values.every(Number.isFinite))); assert.deepEqual(w.errors,[]);
+});
+
+for (const item of V.listSculpturePresets()) {
+  test('sculpture mode loads ' + item.id + ' with verified plate metrics and editable geometry', () => {
+    const w = createWorkspace();
+    assert.equal(w.get('art-section').hidden, true);
+    w.get('art-mode-toggle').click();
+    assert.equal(w.get('art-section').hidden, false);
+    assert.equal(w.studio.inspect().artMode, true);
+    w.group('data-sculpture', item.id).click();
+    assert.equal(w.studio.inspect().sculpture, item.id);
+    assert.equal(w.studio.inspect().stats.watertight, true);
+    assert.equal(w.get('art-plate-title').textContent, item.label);
+    assert.equal(w.get('art-plate-badge').textContent, 'MANIFOLD');
+    assert.equal(w.get('art-metric-voxels').textContent, w.studio.inspect().stats.voxelCount.toLocaleString('en-US'));
+    assert.equal(w.group('data-sculpture', item.id).getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(w.studio.snapshot().cells, V.serializeGrid(V.loadPreset(item.id)).cells);
+    w.get('undo').click();
+    assert.notDeepEqual(w.studio.snapshot().cells, V.serializeGrid(V.loadPreset(item.id)).cells);
+    clean(w);
+  });
+}
+
+test('exhibition lighting and turntable toggle without changing geometry', async () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  const before = w.studio.snapshot();
+  w.get('lighting-toggle').click();
+  assert.equal(w.studio.inspect().lighting, true);
+  assert.equal(w.get('lighting-toggle').getAttribute('aria-pressed'), 'true');
+  assert.ok(w.get('art-section')._class.has('exhibition'));
+  w.get('turntable-toggle').click();
+  assert.equal(w.studio.inspect().turntable, true);
+  assert.equal(w.get('turntable-toggle').getAttribute('aria-pressed'), 'true');
+  w.runTimers();
+  assert.equal(w.studio.inspect().yawDeg, 35);
+  w.get('turntable-toggle').click();
+  assert.equal(w.studio.inspect().turntable, false);
+  w.get('art-mode-toggle').click();
+  assert.equal(w.studio.inspect().turntable, false);
+  assert.equal(w.studio.inspect().artMode, false);
+  assert.deepEqual(w.studio.snapshot(), before);
+  clean(w);
+});
+
+test('exhibition plate export writes a complete PNG with a valid trailer', async () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.group('data-sculpture', 'mengerLantern').click();
+  w.get('art-export-plate').click();
+  assert.equal(w.downloads.length, 1);
+  assert.match(w.downloads[0].filename, /-plate\.png$/);
+  const bytes = new Uint8Array(await w.downloads[0].blob.arrayBuffer());
+  assert.deepEqual(Array.from(bytes.slice(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(bytes.length > 100000, true);
+  assert.equal(String.fromCharCode(...bytes.slice(-8, -4)), 'IEND');
+  assert.equal(new DataView(bytes.buffer).getUint32(bytes.length - 12), 0);
+  assert.match(w.get('toast').textContent, /1400 x 1000 PNG/);
+  clean(w);
+});
+
+test('exhibition plate PNG contains a decodable zlib stream whose adler32 matches the raw pixels', async () => {
+  const zlib = require('node:zlib');
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.group('data-sculpture', 'mengerLantern').click();
+  w.get('art-export-plate').click();
+  const bytes = new Uint8Array(await w.downloads[0].blob.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  let offset = 8, idat = null;
+  while (offset < bytes.length) {
+    const length = view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
+    if (type === 'IDAT') idat = bytes.slice(offset + 8, offset + 8 + length);
+    offset += 12 + length;
+  }
+  assert.ok(idat && idat.length > 0);
+  const raw = zlib.inflateSync(Buffer.from(idat));
+  assert.equal(raw.length, (1400 * 3 + 1) * 1000);
+  let a = 1, b = 0;
+  for (let i = 0; i < raw.length; i++) { a = (a + raw[i]) % 65521; b = (b + a) % 65521; }
+  const trailer = (idat[idat.length - 4] << 24) | (idat[idat.length - 3] << 16) | (idat[idat.length - 2] << 8) | idat[idat.length - 1];
+  assert.equal(trailer >>> 0, (b * 65536 + a) >>> 0);
+  clean(w);
+});
+
+test('plate title follows the lattice on screen, not a remembered sculpture', () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.group('data-sculpture', 'mengerLantern').click();
+  assert.equal(w.get('art-plate-title').textContent, 'Menger Sponge Lantern');
+  w.group('data-showcase', 'deskOrganizer').click();
+  assert.equal(w.get('art-plate-title').textContent, 'Editable lattice');
+  assert.equal(w.studio.inspect().sculpture, null);
+  assert.equal(w.get('art-plate-badge').textContent, 'MANIFOLD');
+  w.group('data-sculpture', 'gyroidPavilion').click();
+  assert.equal(w.get('art-plate-title').textContent, 'Minimalist Gyroid Pavilion');
+  assert.equal(w.studio.inspect().sculpture, 'gyroidPavilion');
+  clean(w);
+});
+
+test('leaving art mode stops exhibition lighting and restores CAD colors', () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.get('lighting-toggle').click();
+  assert.equal(w.studio.inspect().lighting, true);
+  w.get('art-mode-toggle').click();
+  assert.equal(w.studio.inspect().lighting, false);
+  assert.equal(w.get('lighting-toggle').getAttribute('aria-pressed'), 'false');
+  assert.equal(w.get('lighting-toggle').textContent, 'Exhibition lighting');
+  assert.equal(w.get('art-section')._class.has('exhibition'), false);
+  clean(w);
+});
+
+test('artist statement explains implicit surfaces and fabrication formats', () => {
+  const html = require('node:fs').readFileSync(__dirname + '/index.html', 'utf8');
+  assert.match(html, /id="art-statement"/);
+  assert.match(html, /Artist statement and fabrication spec/);
+  assert.match(html, /minimal surface/);
+  assert.match(html, /OpenSCAD/);
 });

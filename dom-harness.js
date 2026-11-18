@@ -124,6 +124,7 @@ function createWorkspace(options = {}) {
     },
     getComputedStyle: () => ({ getPropertyValue: name => ({ '--line': '#dcded6', '--line-strong': '#9ba89b', '--panel': '#ffffff', '--ink': '#20252a', '--ink-soft': '#59616a', '--voxel-a': '#849cb0', '--slice': '#ad400b' }[name] || '') }),
     setTimeout: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; }, clearTimeout: id => timers.delete(id),
+    setInterval: callback => { const id = ++nextTimer; timers.set(id, { callback, delay: 0, interval: true }); return id; }, clearInterval: id => timers.delete(id),
     addEventListener: (type, handler) => windowEvents.set(type, handler),
     devicePixelRatio: options.dpr || 1,
     ResizeObserver: class { constructor(callback) { this.callback = callback; } observe(node) { if (node.tagName !== 'CANVAS') throw new Error('unexpected observed node'); } }
@@ -138,7 +139,7 @@ function createWorkspace(options = {}) {
     group: (attribute, value) => { const node = nodes.find(node => node.attrs[attribute] === value); if (!node) throw new Error('missing selector ' + attribute + '=' + value); return node; },
     key: (key, extra = {}) => documentEvents.get('keydown')({ key, target: document.activeElement, preventDefault() { this.defaultPrevented = true; }, ...extra }),
     resize: (width, height, dpr) => { bounds.width = width; bounds.height = height; sandbox.devicePixelRatio = dpr; windowEvents.get('resize')(); },
-    runTimers: () => { const pending = [...timers.values()]; timers.clear(); pending.forEach(timer => timer.callback()); }
+    runTimers: () => { const pending = [...timers.values()].filter(timer => !timer.interval); timers.clear(); pending.forEach(timer => timer.callback()); }
   };
 }
 module.exports = { createWorkspace };

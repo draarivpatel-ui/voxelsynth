@@ -1,10 +1,10 @@
 # VoxelSynth
 
-**Shape. Inspect. Manufacture.** A local CAD studio that turns an editable voxel lattice into useful parts and checks the geometry before it leaves your browser.
+**Shape. Inspect. Manufacture.** A local CAD studio that turns an editable voxel lattice into useful parts and mathematical sculptures, then checks the geometry before it leaves your browser.
 
 [Open the studio](https://aariv.me/voxelsynth/) | [Submission story](DEVPOST_UPGRADE.md)
 
-Pick a desk organizer, card vault, cable comb, board fixture or blended SDF sensor dock. Edit it with constructive solid geometry, inspect a layer, test the surface topology and export STL, OBJ or OpenSCAD. Every operation runs in plain browser JavaScript. There are no accounts, uploads, runtime packages, remote fonts or build steps.
+Pick a desk organizer, card vault, cable comb, board fixture or blended SDF sensor dock. Edit it with constructive solid geometry, inspect a layer, test the surface topology and export STL, OBJ or OpenSCAD. Sculpture mode adds four algorithmic artworks sampled onto the same lattice, with exhibition lighting, a turntable and a museum-style exhibition plate export. Every operation runs in plain browser JavaScript. There are no accounts, uploads, runtime packages, remote fonts or build steps.
 
 ## A quick judging path
 
@@ -13,8 +13,9 @@ Pick a desk organizer, card vault, cable comb, board fixture or blended SDF sens
 3. Hover the XY layer inset to read integer cell coordinates and physical cell centers. Click a cell, then **Undo**.
 4. Press **Verify all 4 export formats**. Independent readers reparse three mesh formats, reconstruct OpenSCAD occupancy and restore project JSON.
 5. Download **Binary STL** or **Save project**. Open the JSON later to recover every cell and its pitch.
+6. Toggle **Sculpture mode**. Click each of the four sculpture cards, watch the live plate report MANIFOLD for every one, play the turntable and switch on exhibition lighting. Export the exhibition plate PNG and open it in any image viewer.
 
-The showcase buttons load complete designs directly. The part recipe selector can regenerate a design at a custom resolution.
+The showcase buttons load complete designs directly. The part recipe selector can regenerate a design at a custom resolution, and every sculpture card stays editable: erase cells, shell it, mirror it, undo.
 
 ## What the studio contains
 
@@ -25,6 +26,7 @@ The showcase buttons load complete designs directly. The part recipe selector ca
 | Recover | 32 geometry revisions with undo/redo; project JSON save/open; failed edits and imports preserve the current geometry |
 | Verify | Counted edge incidences, directed winding, connected vertex link cycles, surface components, Euler characteristic, total genus, area and volume |
 | Export | ASCII STL, binary STL, indexed OBJ and cuboid-merged OpenSCAD; every download is reparsed before delivery |
+| Sculpt | Four algorithmic sculpture presets (gyroid pavilion, Menger lantern, helical ribbon, Voronoi amphitheater) on the editable lattice; exhibition lighting, turntable orbit and a locally encoded 1400 x 1000 exhibition plate PNG |
 | Access | Focusable canvas, direct X/Y/Z cell editor, keyboard edits, visible focus, live status, large touch targets and reduced motion preferences |
 | Display | Responsive layouts with the viewport first on narrow screens; light and dark themes; CSS-pixel drawing with a DPI-scaled backing store |
 
@@ -44,6 +46,21 @@ These numbers were computed from the engine's default presets on 2026-11-15. All
 
 The desk organizer's binary STL is exactly 426,484 bytes: an 84-byte header plus 8,528 records of 50 bytes. OpenSCAD represents its 4,128 occupied cells with nine disjoint cuboids. The measured relative volume difference after default preset mesh round trips is zero at the stored precision.
 
+### Sculpture mode geometry
+
+Sculpture mode samples four algorithmic artworks onto the same integer lattice. Each preset is deterministic, passes the same counted edge and vertex link verification as the CAD parts, and round trips through all four manufacturing formats and project JSON. Numbers were computed from the engine defaults on 2026-11-18.
+
+| Sculpture | Grid / pitch mm | Solid cells | Export triangles | Volume cm3 | Total genus | OpenSCAD cuboids |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Minimalist Gyroid Pavilion | 30 x 30 x 18 / 1.5 | 15,144 | 8,464 | 51.11 | 0 | 9 |
+| Menger Sponge Lantern | 27 x 27 x 27 / 1.5 | 3,954 | 22,932 | 13.34 | 240 | 1,671 |
+| Helical Kinetic Ribbon | 30 x 30 x 23 / 1.5 | 5,602 | 15,212 | 18.91 | 3 | 485 |
+| Voronoi Terraced Amphitheater | 36 x 36 x 16 / 1.5 | 14,555 | 11,580 | 49.12 | 0 | 340 |
+
+The gyroid is a dilated `sin(x)cos(y) + sin(y)cos(z) + sin(z)cos(x)` shell that stays connected and manifold at this resolution. The lantern keeps base-3 cells with at most one middle digit on a two-cell plinth. The ribbon twists three arms around a central mast between solid rings. The amphitheater steps each column's height from the nearest and second nearest Voronoi seed distances.
+
+Exhibition lighting warms the palette and canvas tint in both themes. The turntable orbits 2 degrees per tick and wraps instead of stalling at the yaw limit. The exhibition plate is a 1400 x 1000 PNG written by a local encoder (stored deflate plus adler32 and CRC32 checksums, no `canvas.toBlob` and no network); its zlib stream decodes and the plate title follows the geometry actually on screen, including when a CAD part is loaded in sculpture mode. Sculpture presets render with their own resolution independent of the lattice inputs; loading one replaces the current geometry and can be undone.
+
 ## Run it
 
 Open [index.html](index.html) directly in a modern browser, or host these files with GitHub Pages. The entry point uses relative local asset paths and works at `https://aariv.me/voxelsynth/`.
@@ -54,18 +71,18 @@ Node.js is needed only for tests and programmatic use. The browser needs no inst
 node --test test.js export-test.js ui-test.js
 ```
 
-Current verified result: **173 tests, 173 passed, 0 failed, 0 skipped**. Tests use Node builtins only.
+Current verified result: **201 tests, 201 passed, 0 failed, 0 skipped**. Tests use Node builtins only.
 
 | Suite | Command | Verified result |
 | --- | --- | --- |
-| Engine | `node --test test.js` | 103 passed, 0 failed |
-| File schemas and precision | `node --test export-test.js` | 35 passed, 0 failed |
-| DOM and interaction | `node --test ui-test.js` | 35 passed, 0 failed |
-| Full suite | `node --test test.js export-test.js ui-test.js` | 173 passed, 0 failed |
+| Engine | `node --test test.js` | 117 passed, 0 failed |
+| File schemas and precision | `node --test export-test.js` | 39 passed, 0 failed |
+| DOM and interaction | `node --test ui-test.js` | 45 passed, 0 failed |
+| Full suite | `node --test test.js export-test.js ui-test.js` | 201 passed, 0 failed |
 
-The engine suite checks all 256 occupancy masks of a 2 x 2 x 2 block, exact center-sampling boundaries, singular contacts, cavities, translations, malformed input and a 2,000,000-cell project snapshot. Format tests check complete STL facets, binary length and little endian records, OBJ index bounds, balanced OpenSCAD structure, disjoint cuboid coverage and pitches from 0.000001 to 1,000,000 mm.
+The engine suite checks all 256 occupancy masks of a 2 x 2 x 2 block, exact center-sampling boundaries, singular contacts, cavities, translations, malformed input and a 2,000,000-cell project snapshot. Format tests check complete STL facets, binary length and little endian records, OBJ index bounds, balanced OpenSCAD structure, disjoint cuboid coverage and pitches from 0.000001 to 1,000,000 mm, plus full schema round trips for every sculpture preset.
 
-The DOM suite executes the actual page scripts in a strict `node:vm` browser contract built from `index.html`. It exercises every action button, five presets, undo/redo, imports, clipboard failure, high DPI picking, resize, keyboard focus and multiple pointers, with zero recorded console or reference errors. Every repository JavaScript file and any inline page script is compiled as part of the suite. These are automated DOM and geometry checks; no physical print or external slicer run is claimed.
+The DOM suite executes the actual page scripts in a strict `node:vm` browser contract built from `index.html`. It exercises every action button, five CAD showcase presets, all four sculpture presets, undo/redo, imports, clipboard failure, high DPI picking, resize, keyboard focus and multiple pointers, with zero recorded console or reference errors. The plate tests decode the exported PNG's zlib stream and check its adler32 trailer, verify the plate title tracks the loaded geometry, and confirm exhibition lighting resets when sculpture mode closes. Every repository JavaScript file and any inline page script is compiled as part of the suite. These are automated DOM and geometry checks; no physical print or external slicer run is claimed.
 
 ## Geometry and verification
 
@@ -118,7 +135,7 @@ The UMD engine exposes `window.VoxelSynth` in classic browser scripts. `window.V
 
 ## Practical limits
 
-The editor supports up to 48 x 48 x 32 cells. The engine caps allocation at 2,000,000 cells and accepts pitch from 0.000001 to 1,000,000 mm. Surface extraction is capped at 250,000 triangles before mesh allocation. An overly complex edit or import preserves the current part and history. Part recipes require at least four cells per axis. Imported project files are limited to 1 MB and the editor dimensions; their declared occupancy length, base64 representation and binary characters are checked exactly.
+The editor supports up to 48 x 48 x 32 cells. The engine caps allocation at 2,000,000 cells and accepts pitch from 0.000001 to 1,000,000 mm. Surface extraction is capped at 250,000 triangles before mesh allocation. An overly complex edit or import preserves the current part and history. Part and sculpture recipes require at least four cells per axis. Sculpture presets carry their own default resolutions that can be overridden down to the editor limit; the plate PNG is a flat stylistic projection, not a shaded or perspective render. Imported project files are limited to 1 MB and the editor dimensions; their declared occupancy length, base64 representation and binary characters are checked exactly.
 
 Voxel resolution controls dimensional accuracy. Curves are stepped surfaces, six-neighbor shells are a discrete morphology, and fixture recipes are design starting points rather than certified hardware fits. Measure a specific board and choose an appropriate pitch before fabrication. The material estimate is volume x infill x density; slicer walls, supports, toolpaths and print time are not simulated.
 
@@ -126,11 +143,11 @@ Voxel resolution controls dimensional accuracy. Curves are stepped surfaces, six
 
 | File | Responsibility |
 | --- | --- |
-| [voxel.js](voxel.js) | Validated lattice, CSG, SDFs, surface extraction, topology, format writers/readers and project serialization |
-| [app.js](app.js) | Renderer, DPI resizing, inspection, recoverable edits, keyboard navigation and checked export delivery |
-| [index.html](index.html), [style.css](style.css) | Local studio, responsive hierarchy, accessible controls and themes |
-| [test.js](test.js) | 103 engine tests |
-| [export-test.js](export-test.js) | 35 format and precision tests |
-| [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 35 UI tests and the strict page contract |
+| [voxel.js](voxel.js) | Validated lattice, CSG, SDFs, algorithmic sculpture presets, surface extraction, topology, format writers/readers and project serialization |
+| [app.js](app.js) | Renderer, DPI resizing, inspection, recoverable edits, keyboard navigation, sculpture mode and checked export delivery |
+| [index.html](index.html), [style.css](style.css) | Local studio, responsive hierarchy, accessible controls, themes and the sculpture section |
+| [test.js](test.js) | 117 engine tests |
+| [export-test.js](export-test.js) | 39 format and precision tests |
+| [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 45 UI tests and the strict page contract |
 
 MIT. See [LICENSE](LICENSE).

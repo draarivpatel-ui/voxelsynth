@@ -7,7 +7,8 @@ const V = require('./voxel.js');
 function cube(pitch = 1) { const grid = V.createGrid(4, 5, 6, pitch); V.addBox(grid, 0, 0, 0, 4 * pitch, 5 * pitch, 6 * pitch); return grid; }
 function equalVolume(actual, expected, tolerance = 1e-5) { assert.ok(Math.abs(actual - expected) / expected <= tolerance, `volume ${actual}, expected ${expected}`); }
 
-for (const name of V.listPresets()) test(name + ': all four manufacturing formats and project cells round trip at the showcase resolution', () => {
+const CAD_PRESETS = ['deskOrganizer', 'sdCardVault', 'cableComb', 'rpiPicoMount', 'sdfDock'];
+for (const name of CAD_PRESETS) test(name + ': all four manufacturing formats and project cells round trip at the showcase resolution', () => {
   const grid = V.loadPreset(name), result = V.verifyExports(grid);
   assert.equal(result.pass, true); assert.equal(result.formats.length, 4);
   assert.ok(result.formats.every(format => format.pass && format.bytes > 0));
@@ -15,7 +16,7 @@ for (const name of V.listPresets()) test(name + ': all four manufacturing format
   assert.ok(result.maxRelativeVolumeError <= 1e-5);
 });
 
-for (const name of V.listPresets()) test(name + ': custom 20 x 14 x 9 lattice round trips at fractional pitch', () => {
+for (const name of CAD_PRESETS) test(name + ': custom 20 x 14 x 9 lattice round trips at fractional pitch', () => {
   const grid = V.loadPreset(name, { nx: 20, ny: 14, nz: 9, pitchMm: 0.3 });
   const result = V.verifyExports(grid);
   assert.equal(result.pass, true);
@@ -192,3 +193,20 @@ test('binary STL accepts ArrayBuffers originating in another JavaScript realm', 
   new Uint8Array(foreign).set(bytes);
   assert.equal(V.parseBinarySTL(foreign).triangles.length, (bytes.length - 84) / 50);
 });
+
+for (const item of V.listSculpturePresets()) {
+  test('sculpture ' + item.id + ' exports valid STL, OBJ, OpenSCAD and project files', () => {
+    const grid = V.loadPreset(item.id), result = V.verifyExports(grid);
+    assert.equal(result.pass, true);
+    assert.deepEqual(result.formats.map(format => format.name), ['ASCII STL', 'Binary STL', 'OBJ', 'OpenSCAD']);
+    assert.ok(result.formats.every(format => format.pass && format.bytes > 0));
+    assert.equal(result.snapshotCells, grid.data.length);
+    assert.ok(result.maxRelativeVolumeError <= 1e-5);
+    const mesh = V.extractManifoldMesh(grid);
+    assert.equal((V.exportBinarySTL(mesh, item.id).length - 84) / 50, mesh.triangles.length);
+    const obj = V.parseOBJ(V.exportOBJ(mesh, item.id));
+    assert.equal(obj.triangles.length, mesh.triangles.length);
+    const scad = V.parseOpenSCAD(V.exportOpenSCAD(grid));
+    assert.deepEqual(Array.from(scad.data), Array.from(grid.data));
+  });
+}

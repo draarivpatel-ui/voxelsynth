@@ -509,9 +509,11 @@ test('rasterizeSDF can subtract from an existing solid', () => {
 
 /* ------------------------------ Presets ------------------------------ */
 
-test('listPresets exposes the five built in designs', () => {
+test('listPresets exposes the five CAD designs and four sculpture designs', () => {
   assert.deepEqual(V.listPresets().sort(),
-    ['cableComb', 'deskOrganizer', 'rpiPicoMount', 'sdCardVault', 'sdfDock']);
+    ['cableComb', 'deskOrganizer', 'gyroidPavilion', 'helicalRibbon', 'mengerLantern', 'rpiPicoMount', 'sdCardVault', 'sdfDock', 'voronoiAmphitheater']);
+  assert.deepEqual(V.listSculpturePresets().map(item => item.id).sort(),
+    ['gyroidPavilion', 'helicalRibbon', 'mengerLantern', 'voronoiAmphitheater']);
 });
 
 test('loadPreset rejects an unknown name', () => {
@@ -851,4 +853,49 @@ test('complex occupancy is rejected before allocating an oversized surface', () 
   for (let z=0;z<32;z++) for(let y=0;y<48;y++) for(let x=0;x<48;x++) if((x+y+z)%2===0) V.setVoxel(grid,x,y,z,1);
   assert.throws(() => V.extractManifoldMesh(grid), /triangle budget/);
   assert.equal(V.MAX_MESH_TRIANGLES,250000);
+});
+
+/* ------------------------ Sculpture presets ------------------------ */
+
+for (const item of V.listSculpturePresets()) {
+  test('sculpture ' + item.id + ' generates deterministic non-empty geometry', () => {
+    const first = V.loadPreset(item.id), second = V.loadPreset(item.id);
+    assert.ok(V.countVoxels(first) > 0, item.label + ' produced an empty lattice');
+    assert.deepEqual(Array.from(first.data), Array.from(second.data));
+    assert.equal(first.nx, item.nx); assert.equal(first.ny, item.ny); assert.equal(first.nz, item.nz);
+    assert.equal(first.pitchMm, item.pitchMm);
+  });
+
+  test('sculpture ' + item.id + ' produces a closed manifold with matched directed edges', () => {
+    const grid = V.loadPreset(item.id), mesh = V.extractManifoldMesh(grid);
+    assert.ok(mesh.triangles.length > 0);
+    assert.equal(mesh.stats.watertight, true, item.label + ' was not watertight');
+    assert.equal(mesh.stats.boundaryEdges, 0);
+    assert.equal(mesh.stats.unmatchedEdges, 0);
+    assert.equal(mesh.stats.nonManifoldVertices, 0);
+    verifyDirectedEdges(mesh, item.label);
+    const expected = V.countVoxels(grid) * Math.pow(grid.pitchMm, 3) / 1000;
+    assert.ok(Math.abs(mesh.stats.volumeCm3 - expected) < 1e-8);
+  });
+
+  test('sculpture ' + item.id + ' rejects invalid resolution options', () => {
+    for (const options of [{ nx: 0 }, { ny: 3 }, { nz: NaN }, { pitchMm: 0 }]) {
+      assert.throws(() => V.loadPreset(item.id, options), RangeError);
+    }
+  });
+}
+
+test('listSculpturePresets returns copies that cannot mutate the registry', () => {
+  const listed = V.listSculpturePresets();
+  listed[0].id = 'changed';
+  assert.notEqual(V.listSculpturePresets()[0].id, 'changed');
+  assert.throws(() => V.loadPreset('changed'), RangeError);
+});
+
+test('Menger lantern removes the center of every third division', () => {
+  const grid = V.mengerLanternPreset();
+  assert.equal(V.countVoxels(grid), 3954);
+  assert.equal(V.getVoxel(grid, 13, 13, 13), 0);
+  assert.equal(V.getVoxel(grid, 0, 0, 2), 1);
+  assert.equal(V.getVoxel(grid, 0, 0, 26), 1);
 });

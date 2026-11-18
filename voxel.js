@@ -1267,13 +1267,174 @@
     return grid;
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Algorithmic sculpture                                              */
+  /* ------------------------------------------------------------------ */
+
+  var SCULPTURE_PRESETS = [
+    { id: 'gyroidPavilion', label: 'Minimalist Gyroid Pavilion', note: 'Triply periodic minimal surface', nx: 30, ny: 30, nz: 18, pitchMm: 1.5 },
+    { id: 'mengerLantern', label: 'Menger Sponge Lantern', note: 'Recursive fractal voxel lattice', nx: 27, ny: 27, nz: 27, pitchMm: 1.5 },
+    { id: 'helicalRibbon', label: 'Helical Kinetic Ribbon', note: 'Parametric triple helix', nx: 30, ny: 30, nz: 23, pitchMm: 1.5 },
+    { id: 'voronoiAmphitheater', label: 'Voronoi Terraced Amphitheater', note: 'Organic stepped cell landscape', nx: 36, ny: 36, nz: 16, pitchMm: 1.5 }
+  ];
+
+  function sculpturePresetDimensions(name, options) {
+    var definition = SCULPTURE_PRESETS.find(function (item) { return item.id === name; });
+    if (!definition) throw new RangeError('unknown sculpture preset: ' + name);
+    var o = options || {};
+    var dimensions = {
+      nx: o.nx === undefined ? definition.nx : o.nx,
+      ny: o.ny === undefined ? definition.ny : o.ny,
+      nz: o.nz === undefined ? definition.nz : o.nz,
+      pitchMm: o.pitchMm === undefined ? definition.pitchMm : o.pitchMm
+    };
+    ['nx', 'ny', 'nz'].forEach(function (key) { assertPositiveInteger(dimensions[key], key); });
+    assertPositive(dimensions.pitchMm, 'pitchMm');
+    if (dimensions.nx < 4 || dimensions.ny < 4 || dimensions.nz < 4) throw new RangeError('sculpture presets need at least 4 cells on each axis');
+    return dimensions;
+  }
+
+  /* A dilated one-cell gyroid shell keeps the minimal surface connected and
+   * removes the diagonal cell contacts that would break a manifold mesh. */
+  function gyroidPavilionPreset(options) {
+    var d = sculpturePresetDimensions('gyroidPavilion', options), p = d.pitchMm;
+    var grid = createGrid(d.nx, d.ny, d.nz, p);
+    assertPresetGrid(grid);
+    var width = d.nx * p, depth = d.ny * p;
+    var period = Math.min(width, depth) * 0.6;
+    var inset = 2 * p;
+    var corner = 3 * p;
+    var seed = createGrid(d.nx, d.ny, d.nz, p);
+    var threshold = 1.5 * p / 1.5;
+    for (var z = 0; z < d.nz; z++) {
+      for (var y = 0; y < d.ny; y++) {
+        for (var x = 0; x < d.nx; x++) {
+          var px = (x + 0.5) * p, py = (y + 0.5) * p, pz = (z + 0.5) * p;
+          if (z < 2) { setVoxel(seed, x, y, z, 1); continue; }
+          var a = px / period * 2 * Math.PI;
+          var b = py / period * 2 * Math.PI;
+          var c = pz / period * 2 * Math.PI;
+          var field = Math.sin(a) * Math.cos(b) + Math.sin(b) * Math.cos(c) + Math.sin(c) * Math.cos(a);
+          var interior = px >= inset && px <= width - inset && py >= inset && py <= depth - inset;
+          var column = (px <= corner || px >= width - corner) && (py <= corner || py >= depth - corner);
+          var rim = z >= d.nz - 2 && (px <= inset || px >= width - inset || py <= inset || py >= depth - inset);
+          setVoxel(seed, x, y, z, (interior && Math.abs(field) <= threshold) || column || rim ? 1 : 0);
+        }
+      }
+    }
+    for (var k = 0; k < seed.data.length; k++) {
+      if (!seed.data[k]) continue;
+      var iz = Math.floor(k / (d.nx * d.ny));
+      var iy = Math.floor(k / d.nx) % d.ny;
+      var ix = k % d.nx;
+      for (var dz = -1; dz <= 1; dz++) for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+        setVoxel(grid, ix + dx, iy + dy, iz + dz, 1);
+      }
+    }
+    return grid;
+  }
+
+  /* Menger sponge: a cell is solid when at most one of its three base-3
+   * digits equals 1. The lantern sits on a two-cell plinth. */
+  function mengerLanternPreset(options) {
+    var d = sculpturePresetDimensions('mengerLantern', options), p = d.pitchMm;
+    var grid = createGrid(d.nx, d.ny, d.nz, p);
+    assertPresetGrid(grid);
+    var digits = [0, 0, 0];
+    for (var z = 0; z < d.nz; z++) {
+      for (var y = 0; y < d.ny; y++) {
+        for (var x = 0; x < d.nx; x++) {
+          digits[0] = x; digits[1] = y; digits[2] = z;
+          if (z < 2) { setVoxel(grid, x, y, z, 1); continue; }
+          var ones = 0;
+          for (var axis = 0; axis < 3; axis++) {
+            if (Math.floor(digits[axis] / 9) === 1) ones++;
+            if (Math.floor((digits[axis] % 9) / 3) === 1) ones++;
+            if (digits[axis] % 3 === 1) ones++;
+          }
+          setVoxel(grid, x, y, z, ones <= 1 ? 1 : 0);
+        }
+      }
+    }
+    return grid;
+  }
+
+  /* Three ribbons twist around a central mast between two solid rings. */
+  function helicalRibbonPreset(options) {
+    var d = sculpturePresetDimensions('helicalRibbon', options), p = d.pitchMm;
+    var grid = createGrid(d.nx, d.ny, d.nz, p);
+    assertPresetGrid(grid);
+    var width = d.nx * p, depth = d.ny * p;
+    var cx = width / 2, cy = depth / 2;
+    var core = 2.6 * p, inner = 6 * p, outer = Math.min(width, depth) * 0.4;
+    var halfWidth = 0.55;
+    var arms = 3, turns = 2, ringLayers = 2;
+    for (var z = 0; z < d.nz; z++) {
+      for (var y = 0; y < d.ny; y++) {
+        for (var x = 0; x < d.nx; x++) {
+          var dx = (x + 0.5) * p - cx, dy = (y + 0.5) * p - cy;
+          var radius = Math.hypot(dx, dy);
+          if (radius <= core) { setVoxel(grid, x, y, z, 1); continue; }
+          var theta = Math.atan2(dy, dx);
+          if (theta < 0) theta += 2 * Math.PI;
+          var phase = theta - 2 * Math.PI * turns * z / d.nz;
+          var onRibbon = false;
+          for (var arm = 0; arm < arms; arm++) {
+            var wrapped = (phase - arm * 2 * Math.PI / arms + Math.PI) % (2 * Math.PI);
+            if (wrapped < 0) wrapped += 2 * Math.PI;
+            var delta = Math.abs(wrapped - Math.PI);
+            if (delta <= halfWidth) onRibbon = true;
+          }
+          var ring = z < ringLayers || z >= d.nz - ringLayers;
+          var solid = (ring && radius >= core && radius <= outer) ||
+            (!ring && radius >= inner && radius <= outer && onRibbon);
+          setVoxel(grid, x, y, z, solid ? 1 : 0);
+        }
+      }
+    }
+    return grid;
+  }
+
+  /* Nearest and second-nearest site distances yield a stepped terrace whose
+   * height grows toward the rim and follows each Voronoi boundary. */
+  function voronoiAmphitheaterPreset(options) {
+    var d = sculpturePresetDimensions('voronoiAmphitheater', options), p = d.pitchMm;
+    var grid = createGrid(d.nx, d.ny, d.nz, p);
+    assertPresetGrid(grid);
+    var cx = d.nx / 2, cy = d.ny / 2;
+    var layout = [[0.5, 0.5], [0.18, 0.22], [0.82, 0.24], [0.2, 0.8], [0.8, 0.8], [0.5, 0.1], [0.1, 0.5], [0.9, 0.55]];
+    var sites = layout.map(function (site, index) { return [site[0] * d.nx + 0.7 * index, site[1] * d.ny + 0.5 * index]; });
+    var radius = Math.min(cx, cy);
+    for (var y = 0; y < d.ny; y++) {
+      for (var x = 0; x < d.nx; x++) {
+        var nearest = Infinity, second = Infinity;
+        sites.forEach(function (site) {
+          var distance = Math.hypot(x + 0.5 - site[0], y + 0.5 - site[1]);
+          if (distance < nearest) { second = nearest; nearest = distance; }
+          else if (distance < second) second = distance;
+        });
+        var radial = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / radius;
+        var edge = Math.min(2, second - nearest);
+        var height = Math.max(1, Math.min(d.nz - 1, Math.floor(1 + radial * (d.nz - 4) + edge * 0.35)));
+        for (var z = 0; z <= height; z++) setVoxel(grid, x, y, z, 1);
+      }
+    }
+    return grid;
+  }
+
   var PRESETS = {
     deskOrganizer: deskOrganizerPreset,
     sdCardVault: sdCardVaultPreset,
     cableComb: cableCombPreset,
     rpiPicoMount: rpiPicoMountPreset,
-    sdfDock: sdfDockPreset
+    sdfDock: sdfDockPreset,
+    gyroidPavilion: gyroidPavilionPreset,
+    mengerLantern: mengerLanternPreset,
+    helicalRibbon: helicalRibbonPreset,
+    voronoiAmphitheater: voronoiAmphitheaterPreset
   };
+
+  function listSculpturePresets() { return SCULPTURE_PRESETS.map(function (item) { return Object.assign({}, item); }); }
 
   function listPresets() { return Object.keys(PRESETS); }
   function loadPreset(name, options) {
@@ -1334,6 +1495,11 @@
     cableCombPreset: cableCombPreset,
     rpiPicoMountPreset: rpiPicoMountPreset,
     sdfDockPreset: sdfDockPreset,
+    gyroidPavilionPreset: gyroidPavilionPreset,
+    mengerLanternPreset: mengerLanternPreset,
+    helicalRibbonPreset: helicalRibbonPreset,
+    voronoiAmphitheaterPreset: voronoiAmphitheaterPreset,
+    listSculpturePresets: listSculpturePresets,
     listPresets: listPresets,
     loadPreset: loadPreset,
     presets: PRESETS

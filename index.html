@@ -16,6 +16,7 @@
   </a>
   <div class="topbar-actions">
     <span class="offline-badge">100% local geometry</span>
+    <button id="art-mode-toggle" class="btn btn-ghost" type="button" aria-pressed="false" aria-controls="art-section">Sculpture mode</button>
     <button id="theme-toggle" class="btn btn-ghost" type="button" aria-label="Toggle light or dark theme" title="Theme (T)">Dark theme</button>
     <button id="help-toggle" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="help-panel">Shortcuts (?)</button>
   </div>
@@ -37,6 +38,19 @@
     <button class="preset-card" data-showcase="rpiPicoMount" type="button" aria-pressed="false"><span class="preset-number">04</span><strong>Board fixture</strong><small>Raised posts + four holes</small></button>
     <button class="preset-card" data-showcase="sdfDock" type="button" aria-pressed="false"><span class="preset-number">05</span><strong>SDF sensor dock</strong><small>Blended collar + flat rim</small></button>
   </div>
+</section>
+<section id="art-section" class="art-section" aria-labelledby="art-heading" hidden>
+  <div class="art-head"><div><p class="eyebrow">SCULPTURE AND ART MODE</p><h2 id="art-heading">Mathematics you can hold.</h2><p>Four algorithmic sculptures, sampled onto the same integer lattice as the CAD parts. Orbit the gallery turntable, switch exhibition lighting, and export a museum-style plate.</p></div><div class="art-actions"><button id="turntable-toggle" class="btn" type="button" aria-pressed="false">Play turntable</button><button id="lighting-toggle" class="btn" type="button" aria-pressed="false">Exhibition lighting</button><button id="art-export-plate" class="btn btn-primary" type="button">Export exhibition plate</button></div></div>
+  <div class="art-grid">
+    <div class="art-presets" role="group" aria-label="Algorithmic sculpture presets">
+      <button class="art-card active" data-sculpture="gyroidPavilion" type="button" aria-pressed="true"><span class="art-index">01</span><strong>Minimalist Gyroid Pavilion</strong><small>Triply periodic minimal surface</small></button>
+      <button class="art-card" data-sculpture="mengerLantern" type="button" aria-pressed="false"><span class="art-index">02</span><strong>Menger Sponge Lantern</strong><small>Recursive fractal voxel lattice</small></button>
+      <button class="art-card" data-sculpture="helicalRibbon" type="button" aria-pressed="false"><span class="art-index">03</span><strong>Helical Kinetic Ribbon</strong><small>Parametric triple helix</small></button>
+      <button class="art-card" data-sculpture="voronoiAmphitheater" type="button" aria-pressed="false"><span class="art-index">04</span><strong>Voronoi Terraced Amphitheater</strong><small>Organic stepped cell landscape</small></button>
+    </div>
+    <div class="art-plate" aria-live="polite"><div class="art-plate-top"><span id="art-plate-title">Minimalist Gyroid Pavilion</span><span id="art-plate-badge" class="art-badge">MANIFOLD</span></div><dl class="art-metrics"><div><dt>Voxels</dt><dd id="art-metric-voxels">0</dd></div><div><dt>Surface area</dt><dd id="art-metric-area">0 mm2</dd></div><div><dt>Enclosed volume</dt><dd id="art-metric-volume">0 cm3</dd></div><div><dt>Export triangles</dt><dd id="art-metric-triangles">0</dd></div></dl><p id="art-formula" class="art-formula">sin(x)cos(y) + sin(y)cos(z) + sin(z)cos(x) = 0</p></div>
+  </div>
+  <details id="art-statement" class="art-statement"><summary>Artist statement and fabrication spec</summary><div class="art-statement-body"><h3>Between equation and object</h3><p>Each sculpture begins as a rule, not a sketch. A gyroid is a triply periodic minimal surface whose mean curvature vanishes at every point. A Menger sponge removes the middle ninth of every division of a cube, keeping only cells whose base-three coordinates contain at most one middle digit. A helix maps angle and height into three rotating ribbons. A Voronoi terrace grows from the distance between competing seed points. Sampling these continuous ideas onto an integer voxel lattice turns mathematical structure into something you can inspect one cell at a time.</p><h3>From lattice to manufactured object</h3><p>The lattice is a manifold surface before it becomes a file. Exposed face quads are merged on shared lattice coordinates, then checked for paired directed edges, connected vertex-link cycles, Euler characteristic and divergence-theorem volume. Export a solid as ASCII or binary STL for slicing, OBJ for a modeling workflow, or OpenSCAD to rebuild the exact cuboid occupancy. The project JSON preserves every cell and its pitch for later editions.</p></div></details>
 </section>
 <section id="help-panel" class="help-panel" hidden>
   <h2>Keyboard reference</h2>
@@ -90,7 +104,7 @@
   </section>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-<footer class="footer"><p>Integer lattice / SDF booleans / counted edge incidences / vertex link cycles / divergence theorem volume</p><p><a href="https://github.com/draarivpatel-ui/voxelsynth">Source and verification suite</a> | No accounts. No uploads. No runtime dependencies.</p></footer>
+<footer class="footer"><p>Integer lattice / SDF booleans / algorithmic sculpture / counted edge incidences / vertex link cycles / divergence theorem volume</p><p><a href="https://github.com/draarivpatel-ui/voxelsynth">Source and verification suite</a> | No accounts. No uploads. No runtime dependencies.</p></footer>
 <script src="voxel.js"></script>
 <script src="app.js"></script>
 </body>
