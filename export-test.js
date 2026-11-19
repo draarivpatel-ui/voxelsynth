@@ -152,13 +152,14 @@ test('empty and singular occupancy cannot produce a false full verification pass
 
 test('source and documentation contain no forbidden dash characters', () => {
   const forbidden = [String.fromCharCode(0x2013), String.fromCharCode(0x2014)];
+  const binaryExtensions = /\.(?:mp4|mov|webm|png|jpe?g|gif|webp|wav|mp3|ico|pdf|zip)$/i;
   function inspect(directory) {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       if (entry.name === '.git' || entry.name === '.implementation-report.md') continue;
       const path = directory + '/' + entry.name;
       if (entry.isSymbolicLink()) throw new Error('repository source must not escape through a symlink');
       if (entry.isDirectory()) inspect(path);
-      else if (entry.isFile()) {
+      else if (entry.isFile() && !binaryExtensions.test(entry.name)) {
         const text = fs.readFileSync(path, 'utf8');
         assert.ok(forbidden.every(character => !text.includes(character)), path);
       }
