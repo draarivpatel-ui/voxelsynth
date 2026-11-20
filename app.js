@@ -25,7 +25,9 @@
     viewportWidth: 900, viewportHeight: 620, dpr: 1,
     selected: [0, 0, 0], hover: null, inset: null,
     undo: [], redo: [], presetName: 'deskOrganizer', verification: null, infillPercent: 100, material: 'PLA',
-    artMode: false, turntable: false, turntableTimer: null, lighting: false
+    artMode: false, turntable: false, turntableTimer: null, lighting: false,
+    sliceAxis: 'z', printCheck: false, printStats: null, floatingSet: null,
+    symmetry: 'off', gallery: false, galleryTimer: null, occBounds: null
   };
 
   var SCULPTURE_INFO = {
@@ -76,13 +78,44 @@
     ];
   }
 
+  /* Occupied millimetre bounds of the lattice: used for tighter framing
+   * and the ground shadow. Falls back to the full lattice when empty. */
+  function occupiedBounds() {
+    var g = state.grid, p = g.pitchMm;
+    var lo = [g.nx, g.ny, g.nz], hi = [-1, -1, -1];
+    for (var z = 0; z < g.nz; z++) {
+      for (var y = 0; y < g.ny; y++) {
+        for (var x = 0; x < g.nx; x++) {
+          if (!V.getVoxel(g, x, y, z)) continue;
+          if (x < lo[0]) lo[0] = x;
+          if (x > hi[0]) hi[0] = x;
+          if (y < lo[1]) lo[1] = y;
+          if (y > hi[1]) hi[1] = y;
+          if (z < lo[2]) lo[2] = z;
+          if (z > hi[2]) hi[2] = z;
+        }
+      }
+    }
+    if (hi[0] < 0) return { min: [0, 0, 0], max: [g.nx * p, g.ny * p, g.nz * p] };
+    return {
+      min: [lo[0] * p, lo[1] * p, lo[2] * p],
+      max: [(hi[0] + 1) * p, (hi[1] + 1) * p, (hi[2] + 1) * p]
+    };
+  }
+
   function fitScale() {
     var g = state.grid;
-    var wMm = g.nx * g.pitchMm, dMm = g.ny * g.pitchMm, hMm = g.nz * g.pitchMm;
+    var p = g.pitchMm;
+    var b = occupiedBounds();
+    state.occBounds = b;
     var v = view();
     var corners = [];
     for (var i = 0; i < 8; i++) {
-      corners.push([(i & 1) * wMm, (i & 2 ? 1 : 0) * dMm, (i & 4 ? 1 : 0) * hMm]);
+      corners.push([
+        (i & 1) ? b.max[0] : b.min[0],
+        (i & 2) ? b.max[1] : b.min[1],
+        (i & 4) ? b.max[2] : b.min[2]
+      ]);
     }
     var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     corners.forEach(function (c) {
@@ -101,8 +134,22 @@
       scale: s,
       originX: (state.viewportWidth * 0.48) - ((minX + maxX) / 2) * s,
       originY: (reservedTop + (state.viewportHeight - reservedTop) * 0.52) - ((minY + maxY) / 2) * s,
-      center: [wMm / 2, dMm / 2, hMm / 2]
+      center: [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2]
     };
+  }
+
+  /* Slice axis helpers: the cross-section plane can sit on X, Y or Z. */
+  function sliceAxisIndex() { return state.sliceAxis === 'x' ? 0 : state.sliceAxis === 'y' ? 1 : 2; }
+
+  /* In-plane axes for the slice grid: Z slice shows XY, X shows YZ, Y shows XZ. */
+  function slicePlaneAxes() {
+    var a = sliceAxisIndex();
+    return a === 0 ? [1, 2] : a === 1 ? [0, 2] : [0, 1];
+  }
+
+  function sliceAxisSize() {
+    var g = state.grid;
+    return [g.nx, g.ny, g.nz][sliceAxisIndex()];
   }
 
   /* ---------------------------------------------------------------- */
@@ -124,7 +171,11 @@
   }
 
   function neighbourFilled(x, y, z, def) {
-    if (state.sliceOnly && z + def.normal[2] > state.slice) return false;
+    if (state.sliceOnly) {
+      var c = [x, y, z];
+      var a = sliceAxisIndex();
+      if (c[a] + def.normal[a] > state.slice) return false;
+    }
     return V.getVoxel(state.grid, x + def.normal[0], y + def.normal[1], z + def.normal[2]) === 1;
   }
 
@@ -135,10 +186,12 @@
     var fit = fitScale();
     var faces = [];
     var visible = FACE_DEFS.filter(function (def) { return isFaceVisible(def, v); });
+    var a = sliceAxisIndex();
     for (var z = 0; z < g.nz; z++) {
       for (var y = 0; y < g.ny; y++) {
         for (var x = 0; x < g.nx; x++) {
-          if (!V.getVoxel(g, x, y, z) || (state.sliceOnly && z > state.slice)) continue;
+          var clipped = state.sliceOnly && (a === 0 ? x : a === 1 ? y : z) > state.slice;
+          if (!V.getVoxel(g, x, y, z) || clipped) continue;
           for (var f = 0; f < visible.length; f++) {
             var def = visible[f];
             if (neighbourFilled(x, y, z, def)) continue;
@@ -164,24 +217,37 @@
     return fit;
   }
 
+  /* The cut plane is a row of cells perpendicular to the slice axis; the
+   * two in-plane axes form its grid. */
   function buildSliceCells(v, fit) {
     var g = state.grid;
     var p = g.pitchMm;
     var cells = [];
     if (!state.showSlice) return cells;
-    var z0 = state.slice;
-    for (var y = 0; y < g.ny; y++) {
-      for (var x = 0; x < g.nx; x++) {
+    var a = sliceAxisIndex();
+    var uv = slicePlaneAxes();
+    var nU = [g.nx, g.ny, g.nz][uv[0]], nV = [g.nx, g.ny, g.nz][uv[1]];
+    var s0 = state.slice;
+    var cornerWorld = function (i, j, di, dj) {
+      var w = [0, 0, 0];
+      w[a] = s0 * p;
+      w[uv[0]] = (i + di) * p;
+      w[uv[1]] = (j + dj) * p;
+      return w;
+    };
+    for (var j = 0; j < nV; j++) {
+      for (var i = 0; i < nU; i++) {
         var pts = [
-          project([x * p, y * p, z0 * p], v, fit.originX, fit.originY, fit.scale),
-          project([(x + 1) * p, y * p, z0 * p], v, fit.originX, fit.originY, fit.scale),
-          project([(x + 1) * p, (y + 1) * p, z0 * p], v, fit.originX, fit.originY, fit.scale),
-          project([x * p, (y + 1) * p, z0 * p], v, fit.originX, fit.originY, fit.scale)
-        ];
-        var cx = (x + 0.5) * p, cy = (y + 0.5) * p, cz = z0 * p;
+          cornerWorld(i, j, 0, 0), cornerWorld(i, j, 1, 0),
+          cornerWorld(i, j, 1, 1), cornerWorld(i, j, 0, 1)
+        ].map(function (w) { return project(w, v, fit.originX, fit.originY, fit.scale); });
+        var voxel = [0, 0, 0];
+        voxel[a] = s0; voxel[uv[0]] = i; voxel[uv[1]] = j;
+        var wc = [0, 0, 0];
+        wc[a] = s0 * p; wc[uv[0]] = (i + 0.5) * p; wc[uv[1]] = (j + 0.5) * p;
         cells.push({
-          pts: pts, voxel: [x, y, z0], filled: !!V.getVoxel(g, x, y, z0),
-          depth: cx * v.camera[0] + cy * v.camera[1] + cz * v.camera[2]
+          pts: pts, voxel: voxel, filled: !!V.getVoxel(g, voxel[0], voxel[1], voxel[2]),
+          depth: wc[0] * v.camera[0] + wc[1] * v.camera[1] + wc[2] * v.camera[2]
         });
       }
     }
@@ -241,9 +307,15 @@
     drawPolygon(baseCorners, null, lineCol, 1.2);
   }
 
+  var AXIS_NAME = ['X', 'Y', 'Z'];
+  var PLANE_NAME = ['YZ', 'XZ', 'XY'];
+
   function drawLayerInspectorHUD(sliceColor) {
     var g = state.grid;
-    var z0 = state.slice;
+    var a = sliceAxisIndex();
+    var uv = slicePlaneAxes();
+    var nU = [g.nx, g.ny, g.nz][uv[0]], nV = [g.nx, g.ny, g.nz][uv[1]];
+    var s0 = state.slice;
     var boxW = state.viewportWidth < 520 ? 154 : 202;
     var boxH = state.viewportWidth < 520 ? 150 : 180;
     var x0 = state.viewportWidth - boxW - 14;
@@ -265,24 +337,26 @@
     ctx.fillRect(x0, y0, boxW, 22);
     ctx.fillStyle = cssVar('--accent-ink') || (state.theme === 'dark' ? '#23201d' : '#ffffff');
     ctx.font = 'bold 10.5px ui-monospace, monospace';
-    ctx.fillText('Z LAYER ' + (z0 + 1) + '/' + g.nz + ' / XY', x0 + 8, y0 + 15);
+    ctx.fillText(AXIS_NAME[a] + ' LAYER ' + (s0 + 1) + '/' + sliceAxisSize() + ' / ' + PLANE_NAME[a], x0 + 8, y0 + 15);
 
     var padX = 12;
     var availW = boxW - 2 * padX;
     var availH = boxH - 52;
-    var cellPx = Math.min(availW / g.nx, availH / g.ny);
-    var gridW = cellPx * g.nx;
-    var gridH = cellPx * g.ny;
+    var cellPx = Math.min(availW / nU, availH / nV);
+    var gridW = cellPx * nU;
+    var gridH = cellPx * nV;
     var gx0 = x0 + Math.floor((boxW - gridW) / 2);
     var gy0 = y0 + 28 + Math.floor((availH - gridH) / 2);
 
     state.inset = { x: x0, y: y0, width: boxW, height: boxH, gx: gx0, gy: gy0, cell: cellPx, gridWidth: gridW, gridHeight: gridH };
     var solidOnSlice = 0;
-    for (var yy = 0; yy < g.ny; yy++) {
-      for (var xx = 0; xx < g.nx; xx++) {
-        var filled = V.getVoxel(g, xx, yy, z0) === 1;
-        var cx = gx0 + xx * cellPx;
-        var cy = gy0 + (g.ny - 1 - yy) * cellPx;
+    for (var j = 0; j < nV; j++) {
+      for (var i = 0; i < nU; i++) {
+        var voxel = [0, 0, 0];
+        voxel[a] = s0; voxel[uv[0]] = i; voxel[uv[1]] = j;
+        var filled = V.getVoxel(g, voxel[0], voxel[1], voxel[2]) === 1;
+        var cx = gx0 + i * cellPx;
+        var cy = gy0 + (nV - 1 - j) * cellPx;
         if (filled) {
           solidOnSlice++;
           ctx.fillStyle = sliceColor;
@@ -291,8 +365,8 @@
           ctx.fillStyle = state.theme === 'dark' ? '#141619' : '#dcd8cf';
           ctx.fillRect(cx, cy, Math.max(0.5, cellPx - 0.6), Math.max(0.5, cellPx - 0.6));
         }
-        if ((state.selected[0] === xx && state.selected[1] === yy && state.selected[2] === z0) ||
-            (state.hover && state.hover.voxel && state.hover.voxel[0] === xx && state.hover.voxel[1] === yy && state.hover.voxel[2] === z0)) {
+        if (sameCell(state.selected, voxel) ||
+            (state.hover && state.hover.voxel && sameCell(state.hover.voxel, voxel))) {
           ctx.strokeStyle = inkCol; ctx.lineWidth = 1.8; ctx.strokeRect(cx, cy, cellPx, cellPx);
         }
       }
@@ -300,8 +374,8 @@
 
     ctx.fillStyle = inkCol;
     ctx.font = '10.5px ui-monospace, monospace';
-    var zMm = (z0 * g.pitchMm).toFixed(1);
-    ctx.fillText('Z=' + zMm + 'mm | ' + solidOnSlice + ' solid cells', x0 + 8, y0 + boxH - 8);
+    var aMm = (s0 * g.pitchMm).toFixed(1);
+    ctx.fillText(AXIS_NAME[a] + '=' + aMm + 'mm | ' + solidOnSlice + ' solid cells', x0 + 8, y0 + boxH - 8);
     ctx.fillStyle = softCol;
     ctx.restore();
   }
@@ -316,10 +390,10 @@
 
     ctx.save();
     ctx.fillStyle = panelBg;
-    ctx.fillRect(12, 12, 344, 24);
+    ctx.fillRect(12, 12, 344, 42);
     ctx.strokeStyle = borderCol;
     ctx.lineWidth = 1;
-    ctx.strokeRect(12, 12, 344, 24);
+    ctx.strokeRect(12, 12, 344, 42);
     ctx.fillStyle = inkCol;
     ctx.font = '11px ui-monospace, monospace';
     ctx.fillText(
@@ -329,6 +403,16 @@
       20,
       28
     );
+    /* Live topology proof: Euler characteristic, genus, manifold verdict. */
+    var s = state.mesh ? state.mesh.stats : null;
+    if (s) {
+      ctx.fillStyle = s.watertight ? (cssVar('--good') || '#22633b') : (cssVar('--warn') || '#963e13');
+      var proof = s.triangleCount
+        ? 'X ' + fmt(s.eulerCharacteristic, 0) + ' | G ' + (s.genusEstimate === null ? 'n/a' : fmt(s.genusEstimate, 0)) +
+          ' | ' + (s.watertight ? '2-MANIFOLD' : 'CONTACT')
+        : 'EMPTY LATTICE';
+      ctx.fillText(proof, 20, 45);
+    }
     ctx.fillStyle = softCol;
     ctx.restore();
   }
@@ -346,23 +430,68 @@
 
   function sameCell(a, b) { return a && b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2]; }
 
+  /* Honest voxel shadow: every occupied column casts its footprint quad on
+   * the build plate, so floating clusters visibly hover above it. */
+  function drawGroundShadow(fit, v) {
+    var g = state.grid, p = g.pitchMm;
+    var a = sliceAxisIndex();
+    var cols = {};
+    for (var z = 0; z < g.nz; z++) {
+      for (var y = 0; y < g.ny; y++) {
+        for (var x = 0; x < g.nx; x++) {
+          var clipped = state.sliceOnly && (a === 0 ? x : a === 1 ? y : z) > state.slice;
+          if (!clipped && V.getVoxel(g, x, y, z)) cols[x + ',' + y] = true;
+        }
+      }
+    }
+    ctx.save();
+    ctx.globalAlpha = state.theme === 'dark' ? 0.26 : 0.12;
+    ctx.fillStyle = state.theme === 'dark' ? '#000000' : '#2a2f35';
+    Object.keys(cols).forEach(function (key) {
+      var xy = key.split(','), x = Number(xy[0]), y = Number(xy[1]);
+      var pts = [
+        project([x * p, y * p, 0], v, fit.originX, fit.originY, fit.scale),
+        project([(x + 1) * p, y * p, 0], v, fit.originX, fit.originY, fit.scale),
+        project([(x + 1) * p, (y + 1) * p, 0], v, fit.originX, fit.originY, fit.scale),
+        project([x * p, (y + 1) * p, 0], v, fit.originX, fit.originY, fit.scale)
+      ];
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (var i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+      ctx.fill();
+    });
+    ctx.restore();
+  }
+
   function render() {
     if (!state.grid) return;
     syncCanvas();
     ctx.clearRect(0, 0, state.viewportWidth, state.viewportHeight);
+    var g = state.grid;
     var fit = buildFaces();
     var v = view();
     var base = state.lighting ? (state.theme === 'dark' ? '#e0bd7d' : '#c69a55') : (cssVar('--voxel-a') || '#647382');
     var edge = state.theme === 'dark' ? '#181a1e' : '#2d333b';
     var sliceColor = cssVar('--slice') || '#d4581d';
+    var floatCol = '#d6453a', overhangCol = '#e08a2e';
 
     drawBuildPlateCage(fit, v);
+    drawGroundShadow(fit, v);
 
     for (var i = 0; i < state.faces.length; i++) {
       var face = state.faces[i];
       var pts = face.pts.map(function (q) { return [q[0], q[1]]; });
       var fill = state.wireframe ? null : shadeColor(base, face.shade);
-      drawPolygon(pts, fill, state.wireframe ? base : edge, state.wireframe ? 1.0 : 0.35);
+      var stroke = state.wireframe ? base : edge;
+      /* Printability overlay: red faces belong to clusters floating above
+       * the plate, orange faces are downward overhangs above z = 0. */
+      if (state.printCheck && state.floatingSet) {
+        var idx = face.voxel[0] + g.nx * (face.voxel[1] + g.ny * face.voxel[2]);
+        if (state.floatingSet.has(idx)) { fill = floatCol; stroke = floatCol; }
+        else if (face.def.axis === 2 && face.def.sign === -1 && face.voxel[2] > 0) { fill = overhangCol; stroke = overhangCol; }
+      }
+      drawPolygon(pts, fill, stroke, state.wireframe ? 1.0 : 0.35);
       if (sameCell(face.voxel, state.hover && state.hover.voxel) || sameCell(face.voxel, state.selected)) {
         ctx.globalAlpha = 0.65; drawPolygon(pts, sliceColor, cssVar('--ink'), 1.5); ctx.globalAlpha = 1;
       }
@@ -459,10 +588,18 @@
   function pickVoxel(px, py) {
     var inset = state.inset;
     if (inset && px >= inset.x && py >= inset.y && px < inset.x + inset.width && py < inset.y + inset.height) {
-      var x = Math.floor((px - inset.gx) / inset.cell);
-      var y = state.grid.ny - 1 - Math.floor((py - inset.gy) / inset.cell);
-      if (px >= inset.gx && py >= inset.gy && px < inset.gx + inset.gridWidth && py < inset.gy + inset.gridHeight && V.inBounds(state.grid, x, y, state.slice)) {
-        return { voxel: [x, y, state.slice], remove: !!V.getVoxel(state.grid, x, y, state.slice), source: 'Layer inset' };
+      var a = sliceAxisIndex();
+      var uv = slicePlaneAxes();
+      var g = state.grid;
+      var nU = [g.nx, g.ny, g.nz][uv[0]], nV = [g.nx, g.ny, g.nz][uv[1]];
+      var iu = Math.floor((px - inset.gx) / inset.cell);
+      var iv = nV - 1 - Math.floor((py - inset.gy) / inset.cell);
+      if (px >= inset.gx && py >= inset.gy && px < inset.gx + inset.gridWidth && py < inset.gy + inset.gridHeight && iu >= 0 && iu < nU && iv >= 0 && iv < nV) {
+        var voxel = [0, 0, 0];
+        voxel[a] = state.slice; voxel[uv[0]] = iu; voxel[uv[1]] = iv;
+        if (V.inBounds(g, voxel[0], voxel[1], voxel[2])) {
+          return { voxel: voxel, remove: !!V.getVoxel(g, voxel[0], voxel[1], voxel[2]), source: 'Layer inset' };
+        }
       }
       return { blocked: true };
     }
@@ -499,6 +636,11 @@
       material: material,
       infillPercent: s.infillPercent
     });
+    /* Occupancy-level printability: floating clusters need supports, thin
+     * cells print below the lattice resolution, overhangs need cooling. */
+    var pr = V.analyzePrintability(state.grid);
+    state.printStats = pr;
+    state.floatingSet = new Set(pr.floatingCellIndices);
     var rows = [
       ['Solid voxels', fmt(s.voxelCount, 0)],
       ['Exposed faces', fmt(s.exposedFaceCount, 0)],
@@ -520,6 +662,11 @@
       ['Invalid vertex links', fmt(s.nonManifoldVertices, 0)],
       ['Winding errors', fmt(s.windingErrors, 0)],
       ['Volume error', fmt(s.volumeErrorMm3, 8) + ' mm3'],
+      ['Overhang cells', fmt(pr.overhangCells, 0) + ' (' + fmt(pr.overhangAreaMm2, 0) + ' mm2)'],
+      ['Thin cells X/Y/Z', fmt(pr.thinX, 0) + ' / ' + fmt(pr.thinY, 0) + ' / ' + fmt(pr.thinZ, 0)],
+      ['Solid components', fmt(pr.solidComponents, 0)],
+      ['Floating clusters', fmt(pr.floatingClusters, 0)],
+      ['Print verdict', pr.printable ? 'Printable: every cluster sits on the plate' : 'Floating: ' + fmt(pr.floatingClusters, 0) + ' cluster(s) need support'],
       ['Infill', fmt(s.infillPercent, 0) + ' %'],
       [material + ' mass', fmt(mass.grams, 2) + ' g']
     ];
@@ -534,24 +681,35 @@
     $('metric-triangles').textContent = fmt(s.triangleCount, 0);
     $('metric-topology').textContent = s.watertight ? 'Verified' : s.triangleCount ? 'Check contacts' : 'Empty';
     document.querySelectorAll('[data-export], [data-copy]').forEach(function (button) {
-      button.disabled = (button.dataset.export || button.dataset.copy) !== 'json' && !s.watertight;
+      var kind = button.dataset.export || button.dataset.copy;
+      button.disabled = kind !== 'json' && kind !== 'vox' && !s.watertight;
     });
     $('verify-exports').disabled = !s.watertight;
     var badge = $('health-badge');
+    var proof = $('euler-proof');
     if (s.watertight) {
-      badge.textContent = 'MANIFOLD PASS / paired edges + cyclic vertex links';
+      badge.textContent = 'MANIFOLD PASS | X = ' + fmt(s.eulerCharacteristic, 0) + ' | G = ' + fmt(s.genusEstimate, 0) +
+        ' | ' + fmt(s.surfaceComponents, 0) + ' closed surface' + (s.surfaceComponents === 1 ? '' : 's');
       badge.className = 'health';
+      proof.textContent = 'V - E + F: ' + fmt(s.uniqueVertices, 0) + ' - ' + fmt(s.uniqueEdges, 0) + ' + ' +
+        fmt(s.triangleCount, 0) + ' = ' + fmt(s.eulerCharacteristic, 0) + '. Every edge has 2 owners, every vertex link forms one ring.';
     } else {
       badge.textContent = s.triangleCount ? 'CONTACT DETECTED / inspect edge and vertex links' : 'EMPTY LATTICE: Add a CSG primitive.';
       badge.className = 'health bad';
+      proof.textContent = s.triangleCount
+        ? 'Topology proof unavailable: ' + fmt(s.nonManifoldEdges + s.nonManifoldVertices + s.boundaryEdges, 0) +
+          ' offending edge or vertex feature(s) must be resolved.'
+        : 'Topology proof pending: the lattice holds no surface yet.';
     }
   }
 
   function updateChips() {
     $('mode-chip').textContent = state.primitive + ' / ' + state.operation;
-    $('slice-chip').textContent = 'Z layer ' + (state.slice + 1) + ' / ' + state.grid.nz +
+    var axisLetter = AXIS_NAME[sliceAxisIndex()];
+    $('slice-chip').textContent = axisLetter + ' layer ' + (state.slice + 1) + ' / ' + sliceAxisSize() +
       (state.sliceOnly ? ' (slice only)' : '');
-    $('slice').max = String(state.grid.nz - 1);
+    $('slice-axis-label').textContent = axisLetter;
+    $('slice').max = String(sliceAxisSize() - 1);
     $('slice').value = String(state.slice);
     $('slice-out').textContent = String(state.slice + 1);
     $('yaw-out').textContent = fmt(state.yawDeg, 0) + ' deg';
@@ -603,6 +761,15 @@
 
   function verifyPayload(kind, payload) {
     if (kind === 'json') { V.deserializeGrid(JSON.parse(payload)); return; }
+    /* VOX carries raw occupancy, so it verifies without a manifold mesh. */
+    if (kind === 'vox') {
+      var vg = V.parseVOX(payload);
+      if (vg.nx !== state.grid.nx || vg.ny !== state.grid.ny || vg.nz !== state.grid.nz ||
+          vg.data.some(function (v, i) { return v !== (state.grid.data[i] ? 1 : 0); })) {
+        throw new Error('VOX occupancy did not round trip');
+      }
+      return;
+    }
     requireGeometry();
     if (kind === 'scad') {
       var grid = V.parseOpenSCAD(payload);
@@ -610,6 +777,7 @@
       return;
     }
     var parsed = kind === 'binary-stl' ? V.parseBinarySTL(payload) :
+      kind === 'ply' ? V.parsePLY(payload) :
       kind === 'obj' ? V.parseOBJ(payload) : V.parseAsciiSTL(payload);
     var stats = V.analyzeMesh(parsed), original = state.mesh.stats;
     if (!stats.watertight || stats.triangleCount !== original.triangleCount ||
@@ -620,12 +788,17 @@
 
   function handleExport(kind) {
     var base = safeName();
-    if (kind === 'binary-stl') {
-      requireGeometry();
-      var bytes = V.exportBinarySTL(state.mesh, base);
+    if (kind === 'binary-stl' || kind === 'ply' || kind === 'vox') {
+      if (kind !== 'vox') requireGeometry();
+      var bytes = kind === 'binary-stl' ? V.exportBinarySTL(state.mesh, base) :
+        kind === 'ply' ? V.exportPLY(state.mesh, base) : V.exportVOX(state.grid);
       verifyPayload(kind, bytes);
-      downloadBlob(new Blob([bytes], { type: 'model/stl' }), base + '.stl');
-      showToast('Binary STL verified and downloaded. ' + state.mesh.triangles.length + ' facets.');
+      var ext = kind === 'binary-stl' ? 'stl' : kind;
+      var mime = kind === 'vox' ? 'application/octet-stream' : 'model/' + ext;
+      downloadBlob(new Blob([bytes], { type: mime }), base + '.' + ext);
+      var detail = kind === 'vox' ? state.grid.data.length + ' cells.' :
+        state.mesh.triangles.length + ' facets.';
+      showToast((kind === 'binary-stl' ? 'Binary STL' : ext.toUpperCase()) + ' verified and downloaded. ' + detail);
       return;
     }
     if (kind !== 'json') requireGeometry();
@@ -773,6 +946,7 @@
     button.textContent = state.artMode ? 'CAD mode' : 'Sculpture mode';
     if (!state.artMode) {
       stopTurntable();
+      stopGallery();
       if (state.lighting) toggleLighting();
     }
     updateArtPlate();
@@ -829,6 +1003,30 @@
       if (next > 180) next -= 360;
       setView(next, state.pitchDeg);
     }, 50);
+  }
+
+  /* Gallery cycles all four sculpture presets on a turntable; any manual
+   * preset pick or mode change stops it. */
+  var GALLERY_ORDER = ['gyroidPavilion', 'mengerLantern', 'helicalRibbon', 'voronoiAmphitheater'];
+
+  function stopGallery() {
+    if (state.galleryTimer !== null) { clearInterval(state.galleryTimer); state.galleryTimer = null; }
+    state.gallery = false;
+    $('gallery-toggle').setAttribute('aria-pressed', 'false');
+    $('gallery-toggle').textContent = 'Play gallery';
+  }
+
+  function toggleGallery() {
+    if (state.gallery) { stopGallery(); return; }
+    state.gallery = true;
+    $('gallery-toggle').setAttribute('aria-pressed', 'true');
+    $('gallery-toggle').textContent = 'Stop gallery';
+    if (!state.turntable) toggleTurntable();
+    if (!sculptureKey()) loadSculpture(GALLERY_ORDER[0]);
+    state.galleryTimer = setInterval(function () {
+      var next = GALLERY_ORDER[(GALLERY_ORDER.indexOf(sculptureKey() || '') + 1) % GALLERY_ORDER.length];
+      loadSculpture(next);
+    }, 6500);
   }
 
   function toggleLighting() {
@@ -997,6 +1195,14 @@
   function minPolyY(poly) { return Math.round(Math.min.apply(null, poly.map(function (p) { return p[1]; }))); }
   function maxPolyY(poly) { return Math.round(Math.max.apply(null, poly.map(function (p) { return p[1]; }))); }
 
+  /* Wraps a grid mutation so it lands on both sides of the chosen mirror
+   * plane; subtractive edits mirror the delta, not the whole lattice. */
+  function withSymmetry(action) {
+    return function (grid) {
+      return state.symmetry === 'off' ? action(grid) : V.applySymmetricEdit(grid, state.symmetry, action);
+    };
+  }
+
   function applyPrimitive() {
     var p = state.grid.pitchMm;
     var x = numberInput('prim-x') * p, y = numberInput('prim-y') * p, z = numberInput('prim-z') * p;
@@ -1005,11 +1211,22 @@
     if (state.primitive !== 'box') r = numberInput('prim-r') * p;
     if (state.primitive === 'cylinder') h = numberInput('prim-h') * p;
     var prefix = state.operation === 'add' ? 'add' : 'subtract';
-    changeGrid(function (grid) {
+    changeGrid(withSymmetry(function (grid) {
       if (state.primitive === 'box') return V[prefix + 'Box'](grid, x, y, z, w, d, h);
       if (state.primitive === 'cylinder') return V[prefix + 'Cylinder'](grid, x, y, z, r, h, 'z');
       return V[prefix + 'Sphere'](grid, x, y, z, r);
-    }, state.primitive + ' ' + state.operation + ' applied.');
+    }), state.primitive + ' ' + state.operation + ' applied' + (state.symmetry === 'off' ? '.' : ' with ' + state.symmetry.toUpperCase() + ' symmetry.'));
+  }
+
+  function setSymmetry(axis) {
+    if (state.symmetry === axis) return;
+    state.symmetry = axis;
+    document.querySelectorAll('[data-sym]').forEach(function (button) {
+      var active = button.dataset.sym === axis;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    showToast(axis === 'off' ? 'Live symmetry off.' : 'Live symmetry on ' + axis.toUpperCase() + ': every edit mirrors across the lattice midpoint.');
   }
 
   function setSegment(group, value) {
@@ -1055,14 +1272,28 @@
   }
 
   function setSlice(value) {
-    state.slice = Math.max(0, Math.min(state.grid.nz - 1, Math.round(value)));
-    state.selected[2] = state.slice; $('slice').value = String(state.slice);
+    state.slice = Math.max(0, Math.min(sliceAxisSize() - 1, Math.round(value)));
+    state.selected[sliceAxisIndex()] = state.slice; $('slice').value = String(state.slice);
+    clearHover(); updateChips(); updateInspector(); render();
+  }
+
+  function setSliceAxis(axis) {
+    if (state.sliceAxis === axis) return;
+    state.sliceAxis = axis;
+    state.slice = Math.max(0, Math.min(sliceAxisSize() - 1, state.slice));
+    state.selected[sliceAxisIndex()] = state.slice;
+    document.querySelectorAll('[data-slice-axis]').forEach(function (button) {
+      var active = button.dataset.sliceAxis === axis;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
     clearHover(); updateChips(); updateInspector(); render();
   }
 
   function toggleSelected() {
     var cell = state.selected.slice();
-    changeGrid(function (grid) { V.setVoxel(grid, cell[0], cell[1], cell[2], !V.getVoxel(grid, cell[0], cell[1], cell[2])); return grid; }, 'Cell ' + cell.join(', ') + ' toggled.');
+    changeGrid(withSymmetry(function (grid) { V.setVoxel(grid, cell[0], cell[1], cell[2], !V.getVoxel(grid, cell[0], cell[1], cell[2])); return grid; }),
+      'Cell ' + cell.join(', ') + ' toggled' + (state.symmetry === 'off' ? '.' : ' with ' + state.symmetry.toUpperCase() + ' symmetry.'));
   }
 
   function importText(text) {
@@ -1077,7 +1308,11 @@
     on('lighting-toggle', 'click', toggleLighting);
     on('art-export-plate', 'click', function () { exportExhibitionPlate(); });
     document.querySelectorAll('[data-sculpture]').forEach(function (button) {
-      button.addEventListener('click', protectedAction(function () { loadSculpture(button.dataset.sculpture); }));
+      button.addEventListener('click', protectedAction(function () { stopGallery(); loadSculpture(button.dataset.sculpture); }));
+    });
+    on('gallery-toggle', 'click', toggleGallery);
+    document.querySelectorAll('[data-sym]').forEach(function (button) {
+      button.addEventListener('click', function () { setSymmetry(button.dataset.sym); });
     });
     on('load-preset', 'click', function () { loadPreset($('preset-select').value, false); });
     on('preset-select', 'change', function () { loadPreset(this.value, false); });
@@ -1119,6 +1354,14 @@
     on('view-iso', 'click', function () { state.zoom = 1; setView(35, 28); });
     on('toggle-wire', 'click', function () { state.wireframe = !state.wireframe; this.setAttribute('aria-pressed', String(state.wireframe)); render(); });
     on('toggle-slice', 'click', function () { state.showSlice = !state.showSlice; this.setAttribute('aria-pressed', String(state.showSlice)); render(); });
+    document.querySelectorAll('[data-slice-axis]').forEach(function (button) {
+      button.addEventListener('click', function () { setSliceAxis(button.dataset.sliceAxis); });
+    });
+    on('toggle-print', 'click', function () {
+      state.printCheck = !state.printCheck; this.setAttribute('aria-pressed', String(state.printCheck));
+      if (state.printCheck) showToast('Printability view: overhang undersides amber, floating clusters red.');
+      render();
+    });
     on('cycle-slice-mode', 'click', function () {
       state.sliceOnly = !state.sliceOnly; this.setAttribute('aria-pressed', String(state.sliceOnly));
       this.textContent = state.sliceOnly ? 'Show full part' : 'Clip above layer'; updateChips(); render();
@@ -1128,16 +1371,16 @@
         var value = numberInput('inspect-' + axis);
         if (!Number.isInteger(value)) throw new RangeError('Inspector coordinates must be whole cells.');
         state.selected[i] = value; updateInspector();
-        if (i === 2) state.slice = state.selected[2];
+        if (i === sliceAxisIndex()) state.slice = state.selected[i];
         updateChips(); render();
       });
     });
     on('toggle-voxel', 'click', toggleSelected);
     on('verify-exports', 'click', function () {
       state.verification = V.verifyExports(state.grid);
-      $('verification-result').textContent = '4 formats passed + project occupancy. Maximum relative volume error: ' + state.verification.maxRelativeVolumeError.toExponential(2) + '.';
+      $('verification-result').textContent = state.verification.formats.length + ' formats passed + project occupancy. Maximum relative volume error: ' + state.verification.maxRelativeVolumeError.toExponential(2) + '.';
       $('verification-result').className = 'verification-result good';
-      showToast('Round trip passed for STL, Binary STL, OBJ, OpenSCAD and project JSON.');
+      showToast('Round trip passed: ' + state.verification.formats.map(function (f) { return f.name; }).join(', ') + ' + project JSON.');
     });
     document.querySelectorAll('[data-export]').forEach(function (button) {
       button.addEventListener('click', protectedAction(function () { handleExport(button.dataset.export); }));
@@ -1180,7 +1423,7 @@
       if (!drag || drag.id !== event.pointerId) return;
       if (!drag.moved) {
         var point = canvasPoint(event), hit = pickVoxel(point[0], point[1]);
-        if (hit && hit.voxel) { state.selected = hit.voxel.slice(); state.slice = hit.voxel[2]; toggleSelected(); }
+        if (hit && hit.voxel) { state.selected = hit.voxel.slice(); state.slice = hit.voxel[sliceAxisIndex()]; toggleSelected(); }
       }
       drag = null;
       if (canvas.hasPointerCapture && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
@@ -1225,6 +1468,8 @@
         case 'a': state.operation = 'add'; setSegment('[data-op]', 'add'); updateChips(); break;
         case 'd': state.operation = 'subtract'; setSegment('[data-op]', 'subtract'); updateChips(); break;
         case 'm': $('mirror-x').click(); break;
+        case 'x': setSymmetry(state.symmetry === 'x' ? 'off' : 'x'); break;
+        case 'y': setSymmetry(state.symmetry === 'y' ? 'off' : 'y'); break;
         case 'h': $('apply-shell').click(); break;
         case 't': $('theme-toggle').click(); break;
         case 'r': $('reset-grid').click(); break;
@@ -1255,11 +1500,17 @@
     window.VoxelSynthStudio = {
       snapshot: function () { return V.serializeGrid(state.grid); },
       importText: importText,
-      inspect: function () { return { selected: state.selected.slice(), slice: state.slice, yawDeg: state.yawDeg, pitchDeg: state.pitchDeg,
+      inspect: function () { return { selected: state.selected.slice(), slice: state.slice, sliceAxis: state.sliceAxis, yawDeg: state.yawDeg, pitchDeg: state.pitchDeg,
         width: state.viewportWidth, height: state.viewportHeight, dpr: state.dpr, zoom: state.zoom,
         inset: Object.assign({}, state.inset), faceCount: state.faces.length, sliceOnly: state.sliceOnly, showSlice: state.showSlice,
         stats: Object.assign({}, state.mesh.stats), history: { undo: state.undo.length, redo: state.redo.length },
-        artMode: state.artMode, sculpture: sculptureKey(), turntable: state.turntable, lighting: state.lighting }; }
+        artMode: state.artMode, sculpture: sculptureKey(), turntable: state.turntable, lighting: state.lighting,
+        symmetry: state.symmetry, gallery: state.gallery, printCheck: state.printCheck,
+        print: state.printStats ? {
+          printable: state.printStats.printable, overhangCells: state.printStats.overhangCells,
+          floatingClusters: state.printStats.floatingClusters, thinWallCells: state.printStats.thinWallCells,
+          solidComponents: state.printStats.solidComponents
+        } : null }; }
     };
   }
 

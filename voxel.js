@@ -358,6 +358,33 @@
     return target;
   }
 
+  /*
+   * Runs an edit on the grid, then propagates every changed cell to its
+   * mirrored position on the chosen axis. Mirroring the delta (not the
+   * whole occupancy) keeps subtract operations symmetric too.
+   */
+  function applySymmetricEdit(grid, axis, edit) {
+    assertGrid(grid);
+    var which = normalizeMirrorAxis(axis);
+    if (typeof edit !== 'function') throw new TypeError('symmetric edit requires a function');
+    var before = new Uint8Array(grid.data);
+    edit(grid);
+    var nx = grid.nx, ny = grid.ny, nz = grid.nz;
+    for (var z = 0; z < nz; z++) {
+      for (var y = 0; y < ny; y++) {
+        for (var x = 0; x < nx; x++) {
+          var i = x + nx * (y + ny * z);
+          if (grid.data[i] === before[i]) continue;
+          var mx = which === 'x' ? nx - 1 - x : x;
+          var my = which === 'y' ? ny - 1 - y : y;
+          var mz = which === 'z' ? nz - 1 - z : z;
+          grid.data[mx + nx * (my + ny * mz)] = grid.data[i];
+        }
+      }
+    }
+    return grid;
+  }
+
   /* ------------------------------------------------------------------ */
   /* Greedy face culling                                                  */
   /* ------------------------------------------------------------------ */
@@ -688,6 +715,77 @@
     return buildMeshStats(mesh, grid, quads.length);
   }
 
+  /*
+   * Occupancy-based printability report: downward faces that need support,
+   * face-connected clusters that never reach the build plate, and cells
+   * only one voxel thick along an axis. Returns indices of floating cells
+   * so callers can highlight them.
+   */
+  function analyzePrintability(grid) {
+    assertGrid(grid);
+    var nx = grid.nx, ny = grid.ny, nz = grid.nz, p = grid.pitchMm;
+    var layer = nx * ny, total = grid.data.length;
+
+    var comp = new Int32Array(total).fill(-1);
+    var queue = new Int32Array(total);
+    var clusterCount = 0, floatingClusters = 0;
+    var floatingCellIndices = [];
+    var dirs = [1, -1, nx, -nx, layer, -layer];
+    for (var start = 0; start < total; start++) {
+      if (!grid.data[start] || comp[start] !== -1) continue;
+      var members = [], touchesPlate = false, head = 0, tail = 0;
+      queue[tail++] = start; comp[start] = clusterCount;
+      while (head < tail) {
+        var i = queue[head++];
+        members.push(i);
+        var x = i % nx, rest = (i - x) / nx, y = rest % ny, z = (rest - y) / ny;
+        if (z === 0) touchesPlate = true;
+        for (var d = 0; d < 6; d++) {
+          var nb = i + dirs[d];
+          if (nb < 0 || nb >= total || !grid.data[nb] || comp[nb] !== -1) continue;
+          var nx2 = nb % nx, rest2 = (nb - nx2) / nx, ny2 = rest2 % ny;
+          if (Math.abs(nx2 - x) + Math.abs(ny2 - y) + Math.abs((rest2 - ny2) / ny - z) !== 1) continue;
+          comp[nb] = clusterCount; queue[tail++] = nb;
+        }
+      }
+      clusterCount++;
+      if (!touchesPlate) { floatingClusters++; floatingCellIndices.push.apply(floatingCellIndices, members); }
+    }
+
+    var overhangCells = 0, thinX = 0, thinY = 0, thinZ = 0, thinWallCells = 0;
+    for (var z2 = 0; z2 < nz; z2++) {
+      for (var y2 = 0; y2 < ny; y2++) {
+        for (var x2 = 0; x2 < nx; x2++) {
+          if (!getVoxel(grid, x2, y2, z2)) continue;
+          var below = getVoxel(grid, x2, y2, z2 - 1);
+          if (z2 > 0 && !below) overhangCells++;
+          var thinA = !getVoxel(grid, x2 - 1, y2, z2) && !getVoxel(grid, x2 + 1, y2, z2);
+          var thinB = !getVoxel(grid, x2, y2 - 1, z2) && !getVoxel(grid, x2, y2 + 1, z2);
+          var thinC = !below && !getVoxel(grid, x2, y2, z2 + 1);
+          if (thinA) thinX++;
+          if (thinB) thinY++;
+          if (thinC) thinZ++;
+          if (thinA || thinB || thinC) thinWallCells++;
+        }
+      }
+    }
+
+    return {
+      printable: floatingClusters === 0,
+      solidComponents: clusterCount,
+      overhangCells: overhangCells,
+      overhangAreaMm2: overhangCells * p * p,
+      floatingClusters: floatingClusters,
+      floatingCells: floatingCellIndices.length,
+      floatingCellIndices: floatingCellIndices,
+      thinWallCells: thinWallCells,
+      thinX: thinX,
+      thinY: thinY,
+      thinZ: thinZ,
+      minFeatureMm: p
+    };
+  }
+
   function estimateMass(mesh, options) {
     if (!mesh || !mesh.stats || !Number.isFinite(mesh.stats.volumeCm3) || mesh.stats.volumeCm3 < 0) throw new TypeError('mass estimate requires a finite nonnegative mesh volume');
     var opts = options || {};
@@ -821,6 +919,58 @@
     return lines.join('\n') + '\n';
   }
 
+  /*
+   * Binary little endian PLY 1.0: an ASCII header declares the vertex and
+   * face elements, then float32 positions and uchar-listed int32 indices
+   * follow. Same float32 collapse guard as the binary STL writer.
+   */
+  function exportPLY(mesh, name) {
+    assertMesh(mesh);
+    var label = solidName(name);
+    var header = [
+      'ply',
+      'format binary_little_endian 1.0',
+      'comment VoxelSynth export',
+      'comment object: ' + label,
+      'element vertex ' + mesh.vertices.length,
+      'property float x',
+      'property float y',
+      'property float z',
+      'element face ' + mesh.triangles.length,
+      'property list uchar int vertex_indices',
+      'end_header',
+      ''
+    ].join('\n');
+    var headerBytes = new Uint8Array(header.length);
+    for (var h = 0; h < header.length; h++) headerBytes[h] = header.charCodeAt(h) & 0x7f;
+    var bytes = new Uint8Array(headerBytes.length + mesh.vertices.length * 12 + mesh.triangles.length * 13);
+    bytes.set(headerBytes, 0);
+    var view = new DataView(bytes.buffer);
+    var off = headerBytes.length;
+    for (var i = 0; i < mesh.vertices.length; i++) {
+      var v = mesh.vertices[i];
+      view.setFloat32(off, v[0], true);
+      view.setFloat32(off + 4, v[1], true);
+      view.setFloat32(off + 8, v[2], true);
+      off += 12;
+    }
+    for (var t = 0; t < mesh.triangles.length; t++) {
+      var ids = mesh.triangles[t];
+      var a = mesh.vertices[ids[0]], b = mesh.vertices[ids[1]], c = mesh.vertices[ids[2]];
+      var rounded = [a, b, c].map(function (point) { return point.map(Math.fround); });
+      if (rounded.some(function (point) { return !point.every(Number.isFinite); }) ||
+          dot3(mesh.normals[t], cross3(sub3(rounded[1], rounded[0]), sub3(rounded[2], rounded[0]))) <= 0) {
+        throw new RangeError('binary PLY float32 precision would collapse a facet; use ASCII STL or OBJ');
+      }
+      bytes[off] = 3;
+      view.setInt32(off + 1, ids[0], true);
+      view.setInt32(off + 5, ids[1], true);
+      view.setInt32(off + 9, ids[2], true);
+      off += 13;
+    }
+    return bytes;
+  }
+
   function layerRectangles(grid, z) {
     var nx = grid.nx, ny = grid.ny;
     var mask = new Uint8Array(nx * ny);
@@ -872,6 +1022,70 @@
     lines.push('}');
     lines.push('voxelsynth_body();');
     return lines.join('\n') + '\n';
+  }
+
+  /*
+   * MagicaVoxel .vox: 'VOX ' magic + version 150, one MAIN chunk whose
+   * children are SIZE (lattice dims), XYZI (solid cells, palette index 1)
+   * and RGBA (256-colour palette). At most 256 cells per axis per the spec.
+   */
+  var VOX_MAX_AXIS = 256;
+  var VOX_PALETTE_INDEX = 1;
+
+  function voxChunk(id, content) {
+    var out = new Uint8Array(12 + content.length);
+    for (var i = 0; i < 4; i++) out[i] = id.charCodeAt(i);
+    var view = new DataView(out.buffer);
+    view.setUint32(4, content.length, true);
+    view.setUint32(8, 0, true);
+    out.set(content, 12);
+    return out;
+  }
+
+  function exportVOX(grid) {
+    assertGrid(grid);
+    if (grid.nx > VOX_MAX_AXIS || grid.ny > VOX_MAX_AXIS || grid.nz > VOX_MAX_AXIS) {
+      throw new RangeError('vox export supports at most ' + VOX_MAX_AXIS + ' cells per axis');
+    }
+    var count = countVoxels(grid);
+    var size = new Uint8Array(12);
+    var sv = new DataView(size.buffer);
+    sv.setUint32(0, grid.nx, true); sv.setUint32(4, grid.ny, true); sv.setUint32(8, grid.nz, true);
+    var xyzi = new Uint8Array(4 + count * 4);
+    var xv = new DataView(xyzi.buffer);
+    xv.setUint32(0, count, true);
+    var at = 4;
+    for (var z = 0; z < grid.nz; z++) {
+      for (var y = 0; y < grid.ny; y++) {
+        for (var x = 0; x < grid.nx; x++) {
+          if (!getVoxel(grid, x, y, z)) continue;
+          xyzi[at] = x; xyzi[at + 1] = y; xyzi[at + 2] = z; xyzi[at + 3] = VOX_PALETTE_INDEX;
+          at += 4;
+        }
+      }
+    }
+    var palette = new Uint8Array(1024);
+    for (var c = 0; c < 256; c++) {
+      var tone = c === 0 ? 0 : Math.round(80 + (c / 255) * 160);
+      palette[c * 4] = c === VOX_PALETTE_INDEX ? 0x84 : tone;
+      palette[c * 4 + 1] = c === VOX_PALETTE_INDEX ? 0x9c : tone;
+      palette[c * 4 + 2] = c === VOX_PALETTE_INDEX ? 0xb0 : tone;
+      palette[c * 4 + 3] = 255;
+    }
+    var children = [voxChunk('SIZE', size), voxChunk('XYZI', xyzi), voxChunk('RGBA', palette)];
+    var childLen = children.reduce(function (sum, part) { return sum + part.length; }, 0);
+    var total = 8 + 12 + childLen;
+    var out = new Uint8Array(total);
+    out[0] = 0x56; out[1] = 0x4f; out[2] = 0x58; out[3] = 0x20;
+    var view = new DataView(out.buffer);
+    view.setUint32(4, 150, true);
+    var pos = 8;
+    for (var j = 0; j < 4; j++) out[pos + j] = 'MAIN'.charCodeAt(j);
+    view.setUint32(pos + 4, 0, true);
+    view.setUint32(pos + 8, childLen, true);
+    pos += 12;
+    children.forEach(function (part) { out.set(part, pos); pos += part.length; });
+    return out;
   }
 
   function numericVector(text) {
@@ -961,6 +1175,131 @@
     return mesh;
   }
 
+  /* Validates the binary little endian PLY 1.0 subset written above:
+   * vertex elements are float x/y/z triples, faces are uchar-listed int32
+   * triangle indices. Normals are rebuilt from winding. */
+  function parsePLY(input) {
+    var bytes = Object.prototype.toString.call(input) === '[object ArrayBuffer]' ? new Uint8Array(input) : input;
+    if (!bytes || Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
+      throw new TypeError('PLY requires binary content');
+    }
+    var headEnd = -1;
+    var marker = [101, 110, 100, 95, 104, 101, 97, 100, 101, 114, 10];
+    for (var i = 0; i + marker.length <= bytes.length; i++) {
+      var found = true;
+      for (var m = 0; m < marker.length; m++) if (bytes[i + m] !== marker[m]) { found = false; break; }
+      if (found) { headEnd = i + marker.length; break; }
+    }
+    if (headEnd < 0) throw new TypeError('PLY end_header is missing');
+    var headerText = '';
+    for (var b = 0; b < headEnd; b++) headerText += String.fromCharCode(bytes[b]);
+    var lines = headerText.trim().split(/\r?\n/).map(function (line) { return line.trim(); });
+    if (lines[0] !== 'ply' || lines[1] !== 'format binary_little_endian 1.0') {
+      throw new TypeError('PLY must be binary_little_endian 1.0');
+    }
+    var vertexCount = -1, faceCount = -1, section = null;
+    var vertexProps = [], faceProp = null;
+    for (var l = 2; l < lines.length; l++) {
+      var line = lines[l];
+      if (line === 'end_header') break;
+      if (line.startsWith('comment ')) continue;
+      var el = /^element (vertex|face) (\d+)$/.exec(line);
+      if (el) {
+        section = el[1];
+        if (section === 'vertex') { if (vertexCount !== -1) throw new TypeError('duplicate vertex element'); vertexCount = Number(el[2]); }
+        else { if (faceCount !== -1) throw new TypeError('duplicate face element'); faceCount = Number(el[2]); }
+        continue;
+      }
+      var prop = /^property (.+)$/.exec(line);
+      if (prop) {
+        if (section === 'vertex') vertexProps.push(prop[1]);
+        else if (section === 'face') faceProp = prop[1];
+        continue;
+      }
+      throw new TypeError('unsupported PLY header line: ' + line);
+    }
+    if (vertexCount < 0 || faceCount < 0) throw new TypeError('PLY must declare vertex and face elements');
+    if (vertexProps.length !== 3 || vertexProps[0] !== 'float x' || vertexProps[1] !== 'float y' || vertexProps[2] !== 'float z') {
+      throw new TypeError('PLY vertices must be float x/y/z');
+    }
+    if (faceProp !== 'list uchar int vertex_indices') throw new TypeError('PLY faces must be uchar-listed int32 vertex_indices');
+    var expected = headEnd + vertexCount * 12 + faceCount * 13;
+    if (bytes.length !== expected) throw new TypeError('PLY byte length does not match declared elements');
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var mesh = { vertices: [], triangles: [], normals: [] };
+    var off = headEnd;
+    for (var vi = 0; vi < vertexCount; vi++) {
+      mesh.vertices.push([view.getFloat32(off, true), view.getFloat32(off + 4, true), view.getFloat32(off + 8, true)]);
+      off += 12;
+    }
+    for (var f = 0; f < faceCount; f++) {
+      if (bytes[off] !== 3) throw new TypeError('PLY face must contain three vertices');
+      var tri = [view.getInt32(off + 1, true), view.getInt32(off + 5, true), view.getInt32(off + 9, true)];
+      off += 13;
+      if (tri.some(function (id) { return id < 0 || id >= vertexCount; })) throw new TypeError('PLY face index out of range');
+      var a = mesh.vertices[tri[0]], b2 = mesh.vertices[tri[1]], c = mesh.vertices[tri[2]];
+      var cross = cross3(sub3(b2, a), sub3(c, a));
+      var len = length3(cross);
+      if (!Number.isFinite(len) || len === 0) throw new TypeError('PLY contains a degenerate face');
+      mesh.triangles.push(tri);
+      mesh.normals.push(cross.map(function (n) { return n / len; }));
+    }
+    assertMesh(mesh);
+    return mesh;
+  }
+
+  /* Validates the single-model .vox subset written above: 'VOX ' + 150,
+   * one MAIN chunk, exactly one SIZE and one XYZI child, optional RGBA.
+   * Returns a pitch 1 grid. */
+  function parseVOX(input) {
+    var bytes = Object.prototype.toString.call(input) === '[object ArrayBuffer]' ? new Uint8Array(input) : input;
+    if (!bytes || Object.prototype.toString.call(bytes) !== '[object Uint8Array]' || bytes.length < 20) {
+      throw new TypeError('VOX requires the magic header and a MAIN chunk');
+    }
+    if (bytes[0] !== 0x56 || bytes[1] !== 0x4f || bytes[2] !== 0x58 || bytes[3] !== 0x20) {
+      throw new TypeError('VOX magic is missing');
+    }
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(4, true) !== 150) throw new TypeError('unsupported VOX version');
+    var id = function (at) { return String.fromCharCode(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]); };
+    if (id(8) !== 'MAIN' || view.getUint32(12, true) !== 0) throw new TypeError('VOX must start with an empty MAIN chunk');
+    var childrenEnd = 20 + view.getUint32(16, true);
+    if (childrenEnd !== bytes.length) throw new TypeError('VOX children do not fill the file');
+    var dims = null, declared = -1, seen = { SIZE: 0, XYZI: 0 };
+    var cells = null;
+    var pos = 20;
+    while (pos < childrenEnd) {
+      var name = id(pos), content = view.getUint32(pos + 4, true), children = view.getUint32(pos + 8, true);
+      if (children !== 0 || pos + 12 + content > childrenEnd) throw new TypeError('VOX chunk sizes are inconsistent');
+      var body = pos + 12;
+      if (name === 'SIZE') {
+        if (content !== 12 || seen.SIZE++) throw new TypeError('VOX SIZE must appear once with 12 bytes');
+        dims = [view.getUint32(body, true), view.getUint32(body + 4, true), view.getUint32(body + 8, true)];
+        if (!dims.every(function (n) { return n >= 1 && n <= VOX_MAX_AXIS; })) throw new TypeError('VOX dimensions out of range');
+      } else if (name === 'XYZI') {
+        if (seen.XYZI++ || content < 4 || (content - 4) % 4 !== 0) throw new TypeError('VOX XYZI must appear once with voxel records');
+        declared = view.getUint32(body, true);
+        if (declared !== (content - 4) / 4) throw new TypeError('VOX voxel count does not match content length');
+        cells = body + 4;
+      } else if (name === 'RGBA') {
+        if (content !== 1024) throw new TypeError('VOX RGBA must hold 256 colours');
+      } else {
+        throw new TypeError('unsupported VOX chunk: ' + name);
+      }
+      pos = body + content;
+    }
+    if (!dims || cells === null) throw new TypeError('VOX needs SIZE and XYZI chunks');
+    var grid = createGrid(dims[0], dims[1], dims[2], 1);
+    for (var n = 0; n < declared; n++) {
+      var x = bytes[cells + n * 4], y = bytes[cells + n * 4 + 1], z = bytes[cells + n * 4 + 2];
+      if (x >= dims[0] || y >= dims[1] || z >= dims[2]) throw new TypeError('VOX voxel outside the declared size');
+      var idx = x + dims[0] * (y + dims[1] * z);
+      if (grid.data[idx]) throw new TypeError('VOX contains a duplicate voxel');
+      grid.data[idx] = 1;
+    }
+    return grid;
+  }
+
   function parseOpenSCAD(text) {
     if (typeof text !== 'string') throw new TypeError('OpenSCAD must be text');
     var shape = /\/\/ Grid: (\d+) x (\d+) x (\d+)/.exec(text);
@@ -1006,7 +1345,8 @@
     var formats = [
       { name: 'ASCII STL', payload: exportAsciiSTL(source), read: parseAsciiSTL },
       { name: 'Binary STL', payload: exportBinarySTL(source), read: parseBinarySTL },
-      { name: 'OBJ', payload: exportOBJ(source), read: parseOBJ }
+      { name: 'OBJ', payload: exportOBJ(source), read: parseOBJ },
+      { name: 'Binary PLY', payload: exportPLY(source), read: parsePLY }
     ];
     var maximum = 0;
     var results = formats.map(function (format) {
@@ -1028,6 +1368,16 @@
     var scad = exportOpenSCAD(grid), restoredGrid = parseOpenSCAD(scad);
     if (restoredGrid.data.some(function (value, i) { return value !== (grid.data[i] ? 1 : 0); })) throw new Error('OpenSCAD changed occupancy');
     results.push({ name: 'OpenSCAD', pass: true, cells: countVoxels(restoredGrid), bytes: scad.length });
+    /* .vox is a per-model format capped at 256 cells per axis; larger
+     * lattices skip it rather than block the other checks. */
+    if (grid.nx <= VOX_MAX_AXIS && grid.ny <= VOX_MAX_AXIS && grid.nz <= VOX_MAX_AXIS) {
+      var voxBytes = exportVOX(grid), voxGrid = parseVOX(voxBytes);
+      if (voxGrid.nx !== grid.nx || voxGrid.ny !== grid.ny || voxGrid.nz !== grid.nz ||
+          voxGrid.data.some(function (value, i) { return value !== (grid.data[i] ? 1 : 0); })) {
+        throw new Error('VOX changed occupancy');
+      }
+      results.push({ name: 'VOX', pass: true, cells: countVoxels(voxGrid), bytes: voxBytes.length });
+    }
     var snapshot = deserializeGrid(serializeGrid(grid));
     if (snapshot.data.some(function (value, i) { return value !== (grid.data[i] ? 1 : 0); })) throw new Error('project snapshot changed occupancy');
     return { pass: true, formats: results, snapshotCells: grid.data.length, maxRelativeVolumeError: maximum };
@@ -1294,41 +1644,26 @@
     return dimensions;
   }
 
-  /* A dilated one-cell gyroid shell keeps the minimal surface connected and
-   * removes the diagonal cell contacts that would break a manifold mesh. */
+  /* The pavilion is a gyroid tunnel network carved through a solid block on a
+   * two-cell plinth. Cutting the signed field band out of the whole volume
+   * keeps the remaining walls thick enough to stay a closed manifold, and the
+   * fenestrated faces show the minimal surface instead of a solid brick. */
   function gyroidPavilionPreset(options) {
     var d = sculpturePresetDimensions('gyroidPavilion', options), p = d.pitchMm;
     var grid = createGrid(d.nx, d.ny, d.nz, p);
     assertPresetGrid(grid);
-    var width = d.nx * p, depth = d.ny * p;
-    var period = Math.min(width, depth) * 0.6;
-    var inset = 2 * p;
-    var corner = 3 * p;
-    var seed = createGrid(d.nx, d.ny, d.nz, p);
-    var threshold = 1.5 * p / 1.5;
+    var period = Math.min(d.nx * p, d.ny * p) * 1.2;
+    var threshold = 1.0;
     for (var z = 0; z < d.nz; z++) {
       for (var y = 0; y < d.ny; y++) {
         for (var x = 0; x < d.nx; x++) {
-          var px = (x + 0.5) * p, py = (y + 0.5) * p, pz = (z + 0.5) * p;
-          if (z < 2) { setVoxel(seed, x, y, z, 1); continue; }
-          var a = px / period * 2 * Math.PI;
-          var b = py / period * 2 * Math.PI;
-          var c = pz / period * 2 * Math.PI;
+          if (z < 2) { setVoxel(grid, x, y, z, 1); continue; }
+          var a = (x + 0.5) * p / period * 2 * Math.PI;
+          var b = (y + 0.5) * p / period * 2 * Math.PI;
+          var c = (z + 0.5) * p / period * 2 * Math.PI;
           var field = Math.sin(a) * Math.cos(b) + Math.sin(b) * Math.cos(c) + Math.sin(c) * Math.cos(a);
-          var interior = px >= inset && px <= width - inset && py >= inset && py <= depth - inset;
-          var column = (px <= corner || px >= width - corner) && (py <= corner || py >= depth - corner);
-          var rim = z >= d.nz - 2 && (px <= inset || px >= width - inset || py <= inset || py >= depth - inset);
-          setVoxel(seed, x, y, z, (interior && Math.abs(field) <= threshold) || column || rim ? 1 : 0);
+          setVoxel(grid, x, y, z, Math.abs(field) > threshold ? 1 : 0);
         }
-      }
-    }
-    for (var k = 0; k < seed.data.length; k++) {
-      if (!seed.data[k]) continue;
-      var iz = Math.floor(k / (d.nx * d.ny));
-      var iy = Math.floor(k / d.nx) % d.ny;
-      var ix = k % d.nx;
-      for (var dz = -1; dz <= 1; dz++) for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
-        setVoxel(grid, ix + dx, iy + dy, iz + dz, 1);
       }
     }
     return grid;
@@ -1482,11 +1817,18 @@
     exportAsciiSTL: exportAsciiSTL,
     exportBinarySTL: exportBinarySTL,
     exportOBJ: exportOBJ,
+    exportPLY: exportPLY,
     exportOpenSCAD: exportOpenSCAD,
+    exportVOX: exportVOX,
     parseAsciiSTL: parseAsciiSTL,
     parseBinarySTL: parseBinarySTL,
     parseOBJ: parseOBJ,
+    parsePLY: parsePLY,
     parseOpenSCAD: parseOpenSCAD,
+    parseVOX: parseVOX,
+    analyzePrintability: analyzePrintability,
+    applySymmetricEdit: applySymmetricEdit,
+    VOX_MAX_AXIS: VOX_MAX_AXIS,
     verifyExports: verifyExports,
     serializeGrid: serializeGrid,
     deserializeGrid: deserializeGrid,

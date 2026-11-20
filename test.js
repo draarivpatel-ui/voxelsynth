@@ -899,3 +899,110 @@ test('Menger lantern removes the center of every third division', () => {
   assert.equal(V.getVoxel(grid, 0, 0, 2), 1);
   assert.equal(V.getVoxel(grid, 0, 0, 26), 1);
 });
+
+test('symmetric edit mirrors an added box across the X midpoint', () => {
+  const grid = V.createGrid(8, 6, 5);
+  V.applySymmetricEdit(grid, 'x', (g) => V.addBox(g, 0, 0, 0, 2, 2, 2));
+  assert.equal(V.countVoxels(grid), 16);
+  assert.equal(V.getVoxel(grid, 0, 0, 0), 1);
+  assert.equal(V.getVoxel(grid, 7, 0, 0), 1);
+  assert.equal(V.getVoxel(grid, 6, 1, 1), 1);
+});
+
+test('symmetric edit mirrors a subtractive delta instead of the whole lattice', () => {
+  const grid = V.createGrid(9, 4, 4);
+  V.addBox(grid, 0, 0, 0, 9, 4, 4);
+  V.applySymmetricEdit(grid, 'x', (g) => V.subtractBox(g, 0, 0, 0, 2, 2, 2));
+  assert.equal(V.getVoxel(grid, 0, 0, 0), 0);
+  assert.equal(V.getVoxel(grid, 7, 0, 0), 0);
+  assert.equal(V.getVoxel(grid, 4, 0, 0), 1);
+  assert.equal(V.countVoxels(grid), 9 * 4 * 4 - 16);
+});
+
+test('symmetric edit on an odd axis maps the center column onto itself', () => {
+  const grid = V.createGrid(7, 7, 7);
+  V.applySymmetricEdit(grid, 'y', (g) => V.addBox(g, 0, 3, 3, 1, 1, 1));
+  assert.equal(V.countVoxels(grid), 1);
+  assert.equal(V.getVoxel(grid, 0, 3, 3), 1);
+});
+
+test('symmetric edit supports Z and rejects bad axes and non functions', () => {
+  const grid = V.createGrid(4, 4, 8);
+  V.applySymmetricEdit(grid, 'z', (g) => V.addBox(g, 0, 0, 0, 2, 2, 2));
+  assert.equal(V.getVoxel(grid, 0, 0, 7), 1);
+  assert.throws(() => V.applySymmetricEdit(grid, 'w', () => grid), RangeError);
+  assert.throws(() => V.applySymmetricEdit(grid, 'x', null), TypeError);
+});
+
+test('symmetric edit leaves the grid unchanged when the callback does nothing', () => {
+  const grid = V.createGrid(4, 4, 4);
+  V.addBox(grid, 0, 0, 0, 4, 4, 4);
+  V.applySymmetricEdit(grid, 'x', () => grid);
+  assert.equal(V.countVoxels(grid), 64);
+});
+
+test('printability reports a grounded solid as printable with zero floating cells', () => {
+  const grid = V.createGrid(6, 6, 6);
+  V.addBox(grid, 0, 0, 0, 6, 6, 6);
+  const report = V.analyzePrintability(grid);
+  assert.equal(report.printable, true);
+  assert.equal(report.solidComponents, 1);
+  assert.equal(report.floatingClusters, 0);
+  assert.equal(report.overhangCells, 0);
+  assert.equal(report.floatingCells, 0);
+});
+
+test('printability detects a floating cluster and counts its cells', () => {
+  const grid = V.createGrid(8, 8, 8);
+  V.addBox(grid, 0, 0, 0, 4, 4, 1);
+  V.addBox(grid, 6, 6, 5, 2, 2, 2);
+  const report = V.analyzePrintability(grid);
+  assert.equal(report.printable, false);
+  assert.equal(report.solidComponents, 2);
+  assert.equal(report.floatingClusters, 1);
+  assert.equal(report.floatingCells, 8);
+  assert.equal(report.floatingCellIndices.length, 8);
+});
+
+test('printability counts overhang cells above empty air', () => {
+  const grid = V.createGrid(8, 8, 8);
+  V.addBox(grid, 3, 3, 4, 2, 2, 2);
+  const report = V.analyzePrintability(grid);
+  assert.equal(report.overhangCells, 4);
+  assert.equal(report.overhangAreaMm2, 4 * grid.pitchMm * grid.pitchMm);
+});
+
+test('printability counts thin cells per axis', () => {
+  const grid = V.createGrid(9, 9, 9);
+  V.addBox(grid, 4, 0, 0, 1, 9, 9);
+  const report = V.analyzePrintability(grid);
+  assert.equal(report.thinX, 81);
+  assert.equal(report.thinY, 0);
+  assert.equal(report.thinZ, 0);
+});
+
+test('printability does not treat X row wraparound as a neighbor', () => {
+  const grid = V.createGrid(4, 4, 4);
+  V.setVoxel(grid, 3, 0, 2, 1);
+  V.setVoxel(grid, 0, 1, 2, 1);
+  const report = V.analyzePrintability(grid);
+  assert.equal(report.solidComponents, 2);
+  assert.equal(report.floatingClusters, 2);
+});
+
+test('printability reports an empty lattice as printable with no components', () => {
+  const report = V.analyzePrintability(V.createGrid(4, 4, 4));
+  assert.equal(report.printable, true);
+  assert.equal(report.solidComponents, 0);
+  assert.equal(report.minFeatureMm, 1);
+});
+
+test('a hollow shell keeps its cavity and stays watertight', () => {
+  const grid = V.createGrid(8, 8, 8);
+  V.addBox(grid, 0, 0, 0, 8, 8, 8);
+  const hollow = V.shellGrid(grid, 1);
+  const mesh = V.extractManifoldMesh(hollow);
+  assert.equal(mesh.stats.watertight, true);
+  assert.equal(mesh.stats.surfaceComponents, 2);
+  assert.equal(mesh.stats.eulerCharacteristic, 4);
+});

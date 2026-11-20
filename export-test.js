@@ -7,10 +7,12 @@ const V = require('./voxel.js');
 function cube(pitch = 1) { const grid = V.createGrid(4, 5, 6, pitch); V.addBox(grid, 0, 0, 0, 4 * pitch, 5 * pitch, 6 * pitch); return grid; }
 function equalVolume(actual, expected, tolerance = 1e-5) { assert.ok(Math.abs(actual - expected) / expected <= tolerance, `volume ${actual}, expected ${expected}`); }
 
+const ALL_FORMATS = ['ASCII STL', 'Binary STL', 'OBJ', 'Binary PLY', 'OpenSCAD', 'VOX'];
 const CAD_PRESETS = ['deskOrganizer', 'sdCardVault', 'cableComb', 'rpiPicoMount', 'sdfDock'];
-for (const name of CAD_PRESETS) test(name + ': all four manufacturing formats and project cells round trip at the showcase resolution', () => {
+for (const name of CAD_PRESETS) test(name + ': all six export formats and project cells round trip at the showcase resolution', () => {
   const grid = V.loadPreset(name), result = V.verifyExports(grid);
-  assert.equal(result.pass, true); assert.equal(result.formats.length, 4);
+  assert.equal(result.pass, true); assert.equal(result.formats.length, 6);
+  assert.deepEqual(result.formats.map(format => format.name), ALL_FORMATS);
   assert.ok(result.formats.every(format => format.pass && format.bytes > 0));
   assert.equal(result.snapshotCells, grid.data.length);
   assert.ok(result.maxRelativeVolumeError <= 1e-5);
@@ -141,7 +143,101 @@ test('mesh exporters reject malformed indices, degenerate facets and wrong norma
     assert.throws(() => V.exportAsciiSTL(changed), TypeError);
     assert.throws(() => V.exportBinarySTL(changed), TypeError);
     assert.throws(() => V.exportOBJ(changed), TypeError);
+    assert.throws(() => V.exportPLY(changed), TypeError);
   }
+});
+
+test('binary PLY declares a little endian header and exact element records', () => {
+  const mesh = V.extractManifoldMesh(cube()), bytes = V.exportPLY(mesh, 'part');
+  const text = Array.from(bytes.subarray(0, 320)).map(b => String.fromCharCode(b)).join('');
+  assert.ok(text.startsWith('ply\nformat binary_little_endian 1.0\n'));
+  assert.ok(text.includes('element vertex ' + mesh.vertices.length));
+  assert.ok(text.includes('element face ' + mesh.triangles.length));
+  const headEnd = text.indexOf('end_header\n') + 'end_header\n'.length;
+  assert.equal(bytes.length, headEnd + mesh.vertices.length * 12 + mesh.triangles.length * 13);
+  const restored = V.parsePLY(bytes);
+  assert.equal(restored.triangles.length, mesh.triangles.length);
+  assert.equal(V.analyzeMesh(restored).watertight, true);
+  equalVolume(V.analyzeMesh(restored).volumeMm3, mesh.stats.volumeMm3);
+});
+
+test('binary PLY reads a typed array with a nonzero byte offset', () => {
+  const mesh = V.extractManifoldMesh(cube()), bytes = V.exportPLY(mesh);
+  const padded = new Uint8Array(bytes.length + 24); padded.set(bytes, 13);
+  const view = padded.subarray(13, 13 + bytes.length);
+  assert.equal(V.parsePLY(view).triangles.length, mesh.triangles.length);
+});
+
+test('binary PLY rejects text input, forged lengths and bad face records', () => {
+  const mesh = V.extractManifoldMesh(cube()), bytes = V.exportPLY(mesh, 'part');
+  assert.throws(() => V.parsePLY('ply\nformat binary_little_endian 1.0\nend_header\n'), TypeError);
+  const ascii = Buffer.from('ply\nformat ascii 1.0\nelement vertex 0\nend_header\n');
+  assert.throws(() => V.parsePLY(ascii), TypeError);
+  assert.throws(() => V.parsePLY(bytes.slice(0, -1)), TypeError);
+  assert.throws(() => V.parsePLY(new Uint8Array(bytes.length + 1)), TypeError);
+  const forged = new Uint8Array(bytes);
+  const headText = Array.from(forged.subarray(0, 400)).map(b => String.fromCharCode(b)).join('');
+  const headEnd = headText.indexOf('end_header\n') + 'end_header\n'.length;
+  const view = new DataView(forged.buffer);
+  view.setInt32(headEnd + mesh.vertices.length * 12 + 1, 999999, true);
+  assert.throws(() => V.parsePLY(forged), TypeError);
+  const degentri = new Uint8Array(bytes); const dv = new DataView(degentri.buffer);
+  dv.setInt32(headEnd + mesh.vertices.length * 12 + 1, 0, true);
+  dv.setInt32(headEnd + mesh.vertices.length * 12 + 5, 0, true);
+  assert.throws(() => V.parsePLY(degentri), TypeError);
+});
+
+test('binary PLY refuses facets that float32 would collapse', () => {
+  const mesh = V.extractManifoldMesh(cube(0.001));
+  mesh.vertices = mesh.vertices.map(point => point.map(value => value + 1e12));
+  assert.throws(() => V.exportPLY(mesh), /float32 precision would collapse/);
+});
+
+test('VOX preserves dimensions and occupancy exactly through SIZE and XYZI chunks', () => {
+  for (const name of CAD_PRESETS) {
+    const grid = V.loadPreset(name, { nx: 20, ny: 14, nz: 9, pitchMm: 0.3 });
+    const bytes = V.exportVOX(grid);
+    assert.equal(bytes[0], 0x56); assert.equal(bytes[1], 0x4f); assert.equal(bytes[2], 0x58); assert.equal(bytes[3], 0x20);
+    assert.equal(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(4, true), 150);
+    const restored = V.parseVOX(bytes);
+    assert.equal(restored.nx, 20); assert.equal(restored.ny, 14); assert.equal(restored.nz, 9);
+    assert.deepEqual(Array.from(restored.data), Array.from(grid.data));
+    assert.equal(restored.pitchMm, 1);
+  }
+});
+
+test('VOX rejects forged magic, unknown chunks, bad counts and out of range voxels', () => {
+  const grid = cube(); V.setVoxel(grid, 0, 0, 0, 0);
+  const bytes = V.exportVOX(grid);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  assert.throws(() => V.parseVOX(new Uint8Array(20)), TypeError);
+  const magic = new Uint8Array(bytes); magic[0] = 0x21;
+  assert.throws(() => V.parseVOX(magic), TypeError);
+  const version = new Uint8Array(bytes); new DataView(version.buffer).setUint32(4, 149, true);
+  assert.throws(() => V.parseVOX(version), TypeError);
+  const truncated = bytes.slice(0, bytes.length - 5);
+  assert.throws(() => V.parseVOX(truncated), TypeError);
+  /* Forge the XYZI voxel count so it disagrees with the content length. */
+  let at = -1;
+  for (let i = 20; i + 4 <= bytes.length; i++) {
+    if (bytes[i] === 0x58 && bytes[i + 1] === 0x59 && bytes[i + 2] === 0x5a && bytes[i + 3] === 0x49) { at = i; break; }
+  }
+  assert.ok(at > 20);
+  const count = new Uint8Array(bytes); new DataView(count.buffer).setUint32(at + 12, view.getUint32(at + 12, true) + 1, true);
+  assert.throws(() => V.parseVOX(count), TypeError);
+  const outOfRange = new Uint8Array(bytes); outOfRange[at + 16] = 4 + 1;
+  assert.throws(() => V.parseVOX(outOfRange), TypeError);
+});
+
+test('VOX export refuses lattices wider than 256 cells on any axis', () => {
+  assert.throws(() => V.exportVOX(V.createGrid(257, 1, 1)), /256/);
+  assert.throws(() => V.exportVOX(V.createGrid(1, 300, 1)), /256/);
+});
+
+test('VOX and JSON round trip without a manifold mesh', () => {
+  const grid = V.createGrid(3, 3, 3); V.setVoxel(grid, 0, 0, 0, 1); V.setVoxel(grid, 1, 1, 1, 1);
+  const restored = V.parseVOX(V.exportVOX(grid));
+  assert.deepEqual(Array.from(restored.data), Array.from(grid.data));
 });
 
 test('empty and singular occupancy cannot produce a false full verification pass', () => {
@@ -196,10 +292,10 @@ test('binary STL accepts ArrayBuffers originating in another JavaScript realm', 
 });
 
 for (const item of V.listSculpturePresets()) {
-  test('sculpture ' + item.id + ' exports valid STL, OBJ, OpenSCAD and project files', () => {
+  test('sculpture ' + item.id + ' exports valid STL, OBJ, PLY, OpenSCAD, VOX and project files', () => {
     const grid = V.loadPreset(item.id), result = V.verifyExports(grid);
     assert.equal(result.pass, true);
-    assert.deepEqual(result.formats.map(format => format.name), ['ASCII STL', 'Binary STL', 'OBJ', 'OpenSCAD']);
+    assert.deepEqual(result.formats.map(format => format.name), ALL_FORMATS);
     assert.ok(result.formats.every(format => format.pass && format.bytes > 0));
     assert.equal(result.snapshotCells, grid.data.length);
     assert.ok(result.maxRelativeVolumeError <= 1e-5);
@@ -207,7 +303,12 @@ for (const item of V.listSculpturePresets()) {
     assert.equal((V.exportBinarySTL(mesh, item.id).length - 84) / 50, mesh.triangles.length);
     const obj = V.parseOBJ(V.exportOBJ(mesh, item.id));
     assert.equal(obj.triangles.length, mesh.triangles.length);
+    const ply = V.parsePLY(V.exportPLY(mesh, item.id));
+    assert.equal(ply.triangles.length, mesh.triangles.length);
+    equalVolume(V.analyzeMesh(ply).volumeMm3, mesh.stats.volumeMm3);
     const scad = V.parseOpenSCAD(V.exportOpenSCAD(grid));
     assert.deepEqual(Array.from(scad.data), Array.from(grid.data));
+    const vox = V.parseVOX(V.exportVOX(grid));
+    assert.deepEqual(Array.from(vox.data), Array.from(grid.data));
   });
 }

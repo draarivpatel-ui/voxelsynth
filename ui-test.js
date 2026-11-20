@@ -211,9 +211,9 @@ test('drag orbits without editing and zero wheel delta preserves scale', () => {
   clean(w);
 });
 
-test('full export self-check returns four format passes and is invalidated by editing', () => {
+test('full export self-check returns six format passes and is invalidated by editing', () => {
   const w = createWorkspace(); w.get('verify-exports').click();
-  assert.match(w.get('verification-result').textContent, /4 formats passed \+ project occupancy/);
+  assert.match(w.get('verification-result').textContent, /6 formats passed \+ project occupancy/);
   w.get('toggle-voxel').click(); assert.match(w.get('verification-result').textContent, /Geometry changed/);
   clean(w);
 });
@@ -232,11 +232,14 @@ test('empty and contact meshes block manufacturing exports but allow editable pr
 
 test('each download validates its payload and releases the Blob URL', async () => {
   const w = createWorkspace(); w.get('export-name').value = '../part <test>';
-  for (const kind of ['ascii-stl', 'binary-stl', 'obj', 'scad', 'json']) w.group('data-export', kind).click();
-  assert.equal(w.downloads.length, 5);
-  assert.ok(w.downloads.every(download => /^part_test\.(stl|obj|scad|json)$/.test(download.filename)));
+  for (const kind of ['ascii-stl', 'binary-stl', 'obj', 'ply', 'scad', 'vox', 'json']) w.group('data-export', kind).click();
+  assert.equal(w.downloads.length, 7);
+  assert.ok(w.downloads.every(download => /^part_test\.(stl|obj|ply|scad|vox|json)$/.test(download.filename)));
   assert.match(await w.downloads[0].blob.text(), /^solid /);
   assert.equal(V.parseBinarySTL(new Uint8Array(await w.downloads[1].blob.arrayBuffer())).triangles.length, w.studio.inspect().stats.triangleCount);
+  assert.equal(V.parsePLY(new Uint8Array(await w.downloads[3].blob.arrayBuffer())).triangles.length, w.studio.inspect().stats.triangleCount);
+  const vox = V.parseVOX(new Uint8Array(await w.downloads[5].blob.arrayBuffer()));
+  assert.equal(vox.data.length, V.deserializeGrid(w.studio.snapshot()).data.length);
   w.runTimers(); assert.equal(w.urls.size, 0);
   clean(w);
 });
@@ -444,4 +447,127 @@ test('artist statement explains implicit surfaces and fabrication formats', () =
   assert.match(html, /Artist statement and fabrication spec/);
   assert.match(html, /minimal surface/);
   assert.match(html, /OpenSCAD/);
+});
+
+test('slice axis switches repaint the inspector inset and slider range', () => {
+  const w = createWorkspace();
+  const dims = V.deserializeGrid(w.studio.snapshot());
+  w.group('data-slice-axis', 'y').click();
+  assert.equal(w.studio.inspect().sliceAxis, 'y');
+  assert.match(w.get('slice-chip').textContent, new RegExp('^Y layer \\d+ \\/ ' + dims.ny));
+  assert.equal(w.get('slice-axis-label').textContent, 'Y');
+  assert.equal(w.get('slice').max, String(dims.ny - 1));
+  assert.equal(w.group('data-slice-axis', 'y').getAttribute('aria-pressed'), 'true');
+  w.group('data-slice-axis', 'x').click();
+  assert.equal(w.studio.inspect().sliceAxis, 'x');
+  assert.match(w.get('slice-chip').textContent, new RegExp('^X layer \\d+ \\/ ' + dims.nx));
+  assert.equal(w.get('slice').max, String(dims.nx - 1));
+  w.group('data-slice-axis', 'z').click();
+  assert.equal(w.studio.inspect().sliceAxis, 'z');
+  assert.match(w.get('slice-chip').textContent, new RegExp('^Z layer \\d+ \\/ ' + dims.nz));
+  clean(w);
+});
+
+test('slice clipping on the Y axis exposes cut faces of interior geometry', () => {
+  const w = createWorkspace();
+  const full = w.studio.inspect().faceCount;
+  w.group('data-slice-axis', 'y').click();
+  w.get('slice').value = '4'; w.get('slice').dispatch('input');
+  w.get('cycle-slice-mode').click();
+  assert.equal(w.studio.inspect().sliceOnly, true);
+  assert.ok(w.studio.inspect().faceCount < full);
+  w.group('data-slice-axis', 'z').click();
+  assert.equal(w.studio.inspect().sliceOnly, true);
+  clean(w);
+});
+
+test('printability view reports overhang and thin cells without changing geometry', () => {
+  const w = createWorkspace(), before = occupancy(w);
+  w.get('toggle-print').click();
+  const view = w.studio.inspect();
+  assert.equal(view.printCheck, true);
+  assert.equal(w.get('toggle-print').getAttribute('aria-pressed'), 'true');
+  assert.equal(typeof view.print.overhangCells, 'number');
+  assert.equal(typeof view.print.thinWallCells, 'number');
+  assert.equal(view.print.solidComponents >= 1, true);
+  assert.deepEqual(occupancy(w), before);
+  w.get('toggle-print').click(); assert.equal(w.studio.inspect().printCheck, false);
+  clean(w);
+});
+
+test('live X symmetry mirrors a box primitive across the lattice midpoint', () => {
+  const w = createWorkspace();
+  w.get('reset-grid').click();
+  w.group('data-sym', 'x').click();
+  assert.equal(w.studio.inspect().symmetry, 'x');
+  assert.equal(w.group('data-sym', 'x').getAttribute('aria-pressed'), 'true');
+  w.get('prim-x').value = '0'; w.get('prim-y').value = '0'; w.get('prim-z').value = '0';
+  w.get('prim-w').value = '4'; w.get('prim-d').value = '4'; w.get('prim-h').value = '4';
+  w.get('apply-primitive').click();
+  const grid = V.deserializeGrid(w.studio.snapshot());
+  assert.equal(V.countVoxels(grid), 128);
+  assert.equal(V.getVoxel(grid, grid.nx - 1, 0, 0), 1);
+  assert.equal(V.getVoxel(grid, grid.nx - 4, 0, 0), 1);
+  w.group('data-sym', 'off').click(); assert.equal(w.studio.inspect().symmetry, 'off');
+  clean(w);
+});
+
+test('keyboard X and Y toggle live symmetry', () => {
+  const w = createWorkspace();
+  w.key('x'); assert.equal(w.studio.inspect().symmetry, 'x');
+  w.key('x'); assert.equal(w.studio.inspect().symmetry, 'off');
+  w.key('y'); assert.equal(w.studio.inspect().symmetry, 'y');
+  w.key('y'); assert.equal(w.studio.inspect().symmetry, 'off');
+  clean(w);
+});
+
+test('VOX export stays enabled on non-manifold geometry and round trips occupancy', async () => {
+  const w = createWorkspace();
+  w.get('reset-grid').click();
+  assert.equal(w.group('data-export', 'binary-stl').disabled, true);
+  assert.equal(w.group('data-export', 'ply').disabled, true);
+  assert.equal(w.group('data-export', 'vox').disabled, false);
+  w.group('data-export', 'vox').click();
+  assert.equal(w.downloads.length, 1);
+  const vox = V.parseVOX(new Uint8Array(await w.downloads[0].blob.arrayBuffer()));
+  assert.equal(vox.data.length, V.deserializeGrid(w.studio.snapshot()).data.length);
+  clean(w);
+});
+
+test('gallery cycles all four sculpture presets on a turntable interval', () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.get('gallery-toggle').click();
+  assert.equal(w.studio.inspect().gallery, true);
+  assert.equal(w.studio.inspect().turntable, true);
+  assert.equal(w.studio.inspect().sculpture, 'gyroidPavilion');
+  const intervals = [...w.timers.values()].filter(timer => timer.interval);
+  intervals.forEach(timer => timer.callback());
+  assert.equal(w.studio.inspect().sculpture, 'mengerLantern');
+  intervals.forEach(timer => timer.callback());
+  assert.equal(w.studio.inspect().sculpture, 'helicalRibbon');
+  w.group('data-sculpture', 'voronoiAmphitheater').click();
+  assert.equal(w.studio.inspect().gallery, false);
+  w.get('art-mode-toggle').click();
+  clean(w);
+});
+
+test('leaving art mode stops a running gallery and turntable', () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.get('gallery-toggle').click();
+  w.get('art-mode-toggle').click();
+  assert.equal(w.studio.inspect().gallery, false);
+  assert.equal(w.studio.inspect().turntable, false);
+  assert.equal(w.get('gallery-toggle').textContent, 'Play gallery');
+  clean(w);
+});
+
+test('the Euler proof line prints V minus E plus F under the manifold badge', () => {
+  const w = createWorkspace();
+  assert.match(w.get('euler-proof').textContent, /V - E \+ F: [\d,]+ - [\d,]+ \+ [\d,]+ = [\d,]+/);
+  assert.match(w.get('health-badge').textContent, /MANIFOLD PASS \| X = [\d,]+ \| G = [\d,]+/);
+  w.get('reset-grid').click();
+  assert.match(w.get('euler-proof').textContent, /pending/);
+  clean(w);
 });
