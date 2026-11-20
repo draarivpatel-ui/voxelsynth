@@ -381,7 +381,7 @@ test('exhibition plate export writes a complete PNG with a valid trailer', async
   assert.match(w.downloads[0].filename, /-plate\.png$/);
   const bytes = new Uint8Array(await w.downloads[0].blob.arrayBuffer());
   assert.deepEqual(Array.from(bytes.slice(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
-  assert.equal(bytes.length > 100000, true);
+  assert.equal(bytes.length > 20000 && bytes.length < 200000, true, 'plate should be compressed but complete');
   assert.equal(String.fromCharCode(...bytes.slice(-8, -4)), 'IEND');
   assert.equal(new DataView(bytes.buffer).getUint32(bytes.length - 12), 0);
   assert.match(w.get('toast').textContent, /1400 x 1000 PNG/);
@@ -569,5 +569,115 @@ test('the Euler proof line prints V minus E plus F under the manifold badge', ()
   assert.match(w.get('health-badge').textContent, /MANIFOLD PASS \| X = [\d,]+ \| G = [\d,]+/);
   w.get('reset-grid').click();
   assert.match(w.get('euler-proof').textContent, /pending/);
+  clean(w);
+});
+
+test('gallery tour captions each work and pause resumes from the same position', () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.get('gallery-toggle').click();
+  let caption = w.get('tour-caption');
+  assert.equal(caption.hidden, false);
+  assert.match(caption.textContent, /Work 1 \/ 4/);
+  assert.match(caption.textContent, /Minimalist Gyroid Pavilion/);
+  const intervals = [...w.timers.values()].filter(timer => timer.interval);
+  intervals.forEach(timer => timer.callback());
+  assert.match(w.get('tour-caption').textContent, /Work 2 \/ 4/);
+  w.get('gallery-toggle').click();
+  assert.equal(w.get('gallery-toggle').textContent, 'Resume gallery');
+  assert.equal(w.studio.inspect().galleryPaused, true);
+  assert.equal([...w.timers.values()].filter(timer => timer.interval).length, 1);
+  const paused = w.get('tour-caption').textContent;
+  w.get('gallery-toggle').click();
+  assert.equal(w.get('gallery-toggle').textContent, 'Pause gallery');
+  assert.equal(w.get('tour-caption').textContent, paused);
+  const resumed = [...w.timers.values()].filter(timer => timer.interval);
+  assert.equal(resumed.length, 2);
+  resumed.filter(timer => timer.interval && !timer.paused).forEach(timer => timer.callback());
+  assert.match(w.get('tour-caption').textContent, /Work 3 \/ 4/);
+  w.get('art-mode-toggle').click();
+  assert.equal(w.get('tour-caption').hidden, true);
+  assert.equal(w.studio.inspect().galleryOwnsTurntable, false);
+  clean(w);
+});
+
+test('cancelling the gallery returns a pre-existing turntable to its original running state', () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.get('turntable-toggle').click();
+  assert.equal(w.studio.inspect().turntable, true);
+  w.get('gallery-toggle').click();
+  assert.equal(w.studio.inspect().galleryOwnsTurntable, false);
+  w.group('data-sculpture', 'voronoiAmphitheater').click();
+  assert.equal(w.studio.inspect().gallery, false);
+  assert.equal(w.studio.inspect().turntable, true);
+  w.get('gallery-toggle').click();
+  w.get('gallery-exit').click();
+  assert.equal(w.studio.inspect().gallery, false);
+  assert.equal(w.studio.inspect().turntable, true);
+  assert.equal(w.get('gallery-toggle').textContent, 'Play gallery');
+  assert.equal(w.get('gallery-exit').hidden, true);
+  assert.match(w.get('toast').textContent, /Gallery tour closed/);
+  w.get('art-mode-toggle').click();
+  assert.equal(w.studio.inspect().turntable, false);
+  clean(w);
+});
+
+test('printability toggle reveals a three-swatch legend that hides with the overlay', () => {
+  const w = createWorkspace();
+  const legend = w.get('print-legend');
+  assert.equal(legend.hidden, true);
+  w.get('toggle-print').click();
+  assert.equal(legend.hidden, false);
+  assert.equal(w.get('toggle-print').getAttribute('aria-pressed'), 'true');
+  assert.match(w.get('toast').textContent, /amber undersides need support, red clusters float, blue outlines mark thin walls/);
+  w.get('toggle-print').click();
+  assert.equal(legend.hidden, true);
+  clean(w);
+});
+
+test('slice plane group exposes X Y Z axes with a discoverability hint', () => {
+  const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+  assert.match(html, /class="slice-group"[^>]*aria-label="Slice plane controls"/);
+  assert.match(html, /class="slice-hint"/);
+  assert.match(html, /Pick an axis, then drag the layer slider/);
+  for (const axis of ['x', 'y', 'z']) assert.match(html, new RegExp('data-slice-axis="' + axis + '"'));
+});
+
+test('plate carries topology, lattice, caption and six-format metadata without clipping', async () => {
+  const zlib = require('node:zlib');
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.group('data-sculpture', 'voronoiAmphitheater').click();
+  w.get('art-export-plate').click();
+  const bytes = new Uint8Array(await w.downloads[0].blob.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  let offset = 8, idat;
+  while (offset < bytes.length) {
+    const length = view.getUint32(offset);
+    if (String.fromCharCode(...bytes.slice(offset + 4, offset + 8)) === 'IDAT') idat = bytes.slice(offset + 8, offset + 8 + length);
+    offset += 12 + length;
+  }
+  const raw = zlib.inflateSync(Buffer.from(idat));
+  assert.equal(raw.length, (1400 * 3 + 1) * 1000);
+  assert.ok(idat.length < 200000, 'fixed Huffman LZ77 should compress the plate');
+  const metadata = w.get('diag-body').textContent;
+  assert.match(metadata, /Euler \(V - E \+ F\)/);
+  assert.match(metadata, /Total genus/);
+  assert.match(w.get('art-plate-title').textContent, /Voronoi Terraced Amphitheater/);
+  w.get('gallery-toggle').click();
+  assert.match(w.get('tour-caption').textContent, /Voronoi Terraced Amphitheater/);
+  clean(w);
+});
+
+test('light theme long sculpture titles fit inside the plate', async () => {
+  const w = createWorkspace();
+  w.get('art-mode-toggle').click();
+  w.group('data-sculpture', 'voronoiAmphitheater').click();
+  w.get('art-export-plate').click();
+  const bytes = new Uint8Array(await w.downloads[0].blob.arrayBuffer());
+  assert.ok(bytes.length > 20000);
+  assert.equal(new DataView(bytes.buffer).getUint32(16), 1400);
+  assert.equal(new DataView(bytes.buffer).getUint32(20), 1000);
   clean(w);
 });

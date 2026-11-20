@@ -1,7 +1,7 @@
 {
   "name": "voxelsynth",
   "version": "2.0.0",
-  "description": "Local voxel and signed distance field CAD studio with counted mesh topology and verified STL, OBJ and OpenSCAD round trips",
+  "description": "Local voxel and signed distance field CAD studio with counted mesh topology and six verified STL, OBJ, PLY, OpenSCAD and VOX round trips",
   "main": "voxel.js",
   "scripts": {
     "test": "node --test --test-reporter=spec test.js export-test.js ui-test.js",

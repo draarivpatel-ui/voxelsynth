@@ -1006,3 +1006,78 @@ test('a hollow shell keeps its cavity and stays watertight', () => {
   assert.equal(mesh.stats.surfaceComponents, 2);
   assert.equal(mesh.stats.eulerCharacteristic, 4);
 });
+
+test('printability exposes exact cell indices for the overlay legend', () => {
+  const grid = V.createGrid(6, 3, 4);
+  for (let x = 0; x < 6; x++) V.setVoxel(grid, x, 1, 2, 1);
+  V.setVoxel(grid, 0, 1, 0, 1); V.setVoxel(grid, 0, 1, 1, 1);
+  V.setVoxel(grid, 5, 1, 0, 1); V.setVoxel(grid, 5, 1, 1, 1);
+  const report = V.analyzePrintability(grid);
+  assert.equal(report.printable, true);
+  assert.equal(report.overhangCells, 4);
+  assert.equal(report.overhangCellIndices.length, 4);
+  for (const index of report.overhangCellIndices) {
+    const x = index % 6, z = Math.floor(index / 18);
+    assert.ok(z === 2 && x > 0 && x < 5);
+  }
+  assert.ok(report.thinWallCellIndices.length > 0);
+  assert.ok(report.thinWallCellIndices.every(index => {
+    const x = index % 6;
+    return Number.isInteger(index) && index >= 0 && index < grid.data.length && x >= 0 && x < 6;
+  }));
+  const occupied = report.thinWallCellIndices.reduce((sum, index) => sum + grid.data[index], 0);
+  assert.equal(occupied, report.thinWallCellIndices.length);
+});
+
+test('printability flags a floating island with exact cell indices', () => {
+  const grid = V.createGrid(6, 5, 4);
+  for (let x = 0; x < 3; x++) for (let y = 0; y < 3; y++) V.setVoxel(grid, x, y, 0, 1);
+  V.setVoxel(grid, 4, 4, 2, 1);
+  const report = V.analyzePrintability(grid);
+  assert.equal(report.printable, false);
+  assert.equal(report.solidComponents, 2);
+  assert.equal(report.floatingClusters, 1);
+  assert.deepEqual(report.floatingCellIndices, [4 + 6 * (4 + 5 * 2)]);
+});
+
+test('a single voxel on the plate is printable while a detached single voxel floats', () => {
+  const onPlate = V.createGrid(4, 4, 4); V.setVoxel(onPlate, 1, 1, 0, 1);
+  assert.equal(V.analyzePrintability(onPlate).printable, true);
+  const detached = V.createGrid(4, 4, 4); V.setVoxel(detached, 1, 1, 2, 1);
+  const report = V.analyzePrintability(detached);
+  assert.equal(report.printable, false);
+  assert.equal(report.floatingCells, 1);
+  assert.equal(report.thinWallCells, 1);
+});
+
+test('genus-one carved shell round trips all six export formats', () => {
+  const grid = V.createGrid(8, 8, 8);
+  for (let x = 1; x < 7; x++) for (let y = 1; y < 7; y++) for (let z = 0; z < 8; z++) {
+    if (x === 1 || x === 6 || y === 1 || y === 6) V.setVoxel(grid, x, y, z, 1);
+  }
+  for (let x = 3; x <= 4; x++) for (let z = 3; z <= 4; z++) V.setVoxel(grid, x, 1, z, 0);
+  const verified = V.verifyExports(grid);
+  assert.equal(verified.pass, true);
+  assert.deepEqual(verified.formats.map(format => format.name), ['ASCII STL', 'Binary STL', 'OBJ', 'Binary PLY', 'OpenSCAD', 'VOX']);
+  assert.ok(verified.formats.every(format => format.pass === true));
+});
+
+test('degenerate and single-voxel occupancy parse in every export format', () => {
+  const empty = V.createGrid(3, 3, 3);
+  const single = V.createGrid(4, 4, 4); V.setVoxel(single, 1, 1, 0, 1);
+  for (const grid of [empty, single]) {
+    const mesh = V.extractManifoldMesh(grid);
+    const stl = V.parseAsciiSTL(V.exportAsciiSTL(mesh));
+    const binary = V.parseBinarySTL(V.exportBinarySTL(mesh));
+    const obj = V.parseOBJ(V.exportOBJ(mesh));
+    const ply = V.parsePLY(V.exportPLY(mesh));
+    const scad = V.parseOpenSCAD(V.exportOpenSCAD(grid));
+    const vox = V.parseVOX(V.exportVOX(grid));
+    assert.equal(stl.vertices.length, mesh.vertices.length);
+    assert.equal(binary.vertices.length, mesh.vertices.length);
+    assert.equal(obj.vertices.length, mesh.vertices.length);
+    assert.equal(ply.vertices.length, mesh.vertices.length);
+    assert.equal(V.countVoxels(scad), V.countVoxels(grid));
+    assert.equal(V.countVoxels(vox), V.countVoxels(grid));
+  }
+});

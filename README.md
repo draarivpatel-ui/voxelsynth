@@ -15,7 +15,7 @@ Pick a desk organizer, card vault, cable comb, board fixture or blended SDF sens
 5. Toggle **Printability**. Amber undersides are overhangs and red regions are floating clusters that need supports; the diagnostics table lists exact counts.
 6. Switch the slice axis to Y or X and clip above a layer to cut the model open on that plane. Enable **X** live symmetry in Shell and symmetry, apply a box and watch it mirror across the lattice midpoint.
 7. Download **Binary PLY** or **MagicaVoxel VOX** alongside STL, OBJ, OpenSCAD and project JSON.
-8. Toggle **Sculpture mode**. Click **Play gallery** to cycle all four sculptures on the turntable, then click a card to inspect one up close. Export the exhibition plate PNG and open it in any image viewer.
+8. Toggle **Sculpture mode**. Click **Play gallery** to cycle all four curated sculptures with captions on the turntable; pause, resume or exit the tour at any time, then click a card to inspect one up close. Export the exhibition plate PNG and open it in any image viewer.
 
 The showcase buttons load complete designs directly. The part recipe selector can regenerate a design at a custom resolution, and every sculpture card stays editable: erase cells, shell it, mirror it, undo.
 
@@ -29,7 +29,7 @@ The showcase buttons load complete designs directly. The part recipe selector ca
 | Recover | 32 geometry revisions with undo/redo; project JSON save/open; failed edits and imports preserve the current geometry |
 | Verify | Counted edge incidences, directed winding, connected vertex link cycles, surface components, Euler characteristic, total genus, live V - E + F proof, area and volume |
 | Export | ASCII STL, binary STL, indexed OBJ, binary little endian PLY, cuboid-merged OpenSCAD and MagicaVoxel VOX; every download is reparsed before delivery |
-| Sculpt | Four algorithmic sculpture presets (gyroid pavilion, Menger lantern, helical ribbon, Voronoi amphitheater) on the editable lattice; timed gallery cycle, exhibition lighting, turntable orbit and a locally encoded 1400 x 1000 exhibition plate PNG |
+| Sculpt | Four algorithmic sculpture presets (gyroid pavilion, Menger lantern, helical ribbon, Voronoi amphitheater) on the editable lattice; timed curated gallery cycle with captions and pause/resume/exit, exhibition lighting, turntable orbit and a locally encoded 1400 x 1000 exhibition plate PNG |
 | Access | Focusable canvas, direct X/Y/Z cell editor, keyboard edits, visible focus, live status, large touch targets and reduced motion preferences |
 | Display | Responsive layouts with the viewport first on narrow screens; light and dark themes; CSS-pixel drawing with a DPI-scaled backing store |
 
@@ -62,7 +62,7 @@ Sculpture mode samples four algorithmic artworks onto the same integer lattice. 
 
 The pavilion carves the signed `sin(x)cos(y) + sin(y)cos(z) + sin(z)cos(x)` band out of a solid block on a two-cell plinth, leaving a fenestrated monolith of genus 1 whose tunnel network opens on every face. The lantern keeps base-3 cells with at most one middle digit on a two-cell plinth. The ribbon twists three arms around a central mast between solid rings. The amphitheater steps each column's height from the nearest and second nearest Voronoi seed distances.
 
-Exhibition lighting warms the palette and canvas tint in both themes. The turntable orbits 2 degrees per tick and wraps instead of stalling at the yaw limit. The exhibition plate is a 1400 x 1000 PNG written by a local encoder (stored deflate plus adler32 and CRC32 checksums, no `canvas.toBlob` and no network); its zlib stream decodes and the plate title follows the geometry actually on screen, including when a CAD part is loaded in sculpture mode. Sculpture presets render with their own resolution independent of the lattice inputs; loading one replaces the current geometry and can be undone.
+Exhibition lighting warms the palette and canvas tint in both themes. The turntable orbits 2 degrees per tick and wraps instead of stalling at the yaw limit. The exhibition plate is a 1400 x 1000 PNG written by a local encoder (fixed Huffman LZ77 deflate plus adler32 and CRC32 checksums, no `canvas.toBlob` and no network); its zlib stream decodes and the plate title follows the geometry actually on screen, including when a CAD part is loaded in sculpture mode. Sculpture presets render with their own resolution independent of the lattice inputs; loading one replaces the current geometry and can be undone.
 
 ## Run it
 
@@ -74,18 +74,18 @@ Node.js is needed only for tests and programmatic use. The browser needs no inst
 node --test test.js export-test.js ui-test.js
 ```
 
-Current verified result: **230 tests, 230 passed, 0 failed, 0 skipped**. Tests use Node builtins only.
+Current verified result: **241 tests, 241 passed, 0 failed, 0 skipped**. Tests use Node builtins only.
 
 | Suite | Command | Verified result |
 | --- | --- | --- |
-| Engine | `node --test test.js` | 129 passed, 0 failed |
+| Engine | `node --test test.js` | 134 passed, 0 failed |
 | File schemas and precision | `node --test export-test.js` | 47 passed, 0 failed |
-| DOM and interaction | `node --test ui-test.js` | 54 passed, 0 failed |
-| Full suite | `node --test test.js export-test.js ui-test.js` | 230 passed, 0 failed |
+| DOM and interaction | `node --test ui-test.js` | 60 passed, 0 failed |
+| Full suite | `node --test test.js export-test.js ui-test.js` | 241 passed, 0 failed |
 
 The engine suite checks all 256 occupancy masks of a 2 x 2 x 2 block, exact center-sampling boundaries, singular contacts, cavities, translations, malformed input, live mirrored edits, printability component and wraparound analysis, and a 2,000,000-cell project snapshot. Format tests check complete STL facets, binary length and little endian records, OBJ index bounds, binary PLY element records and float32 collapse guards, VOX chunk structure and occupancy fidelity, balanced OpenSCAD structure, disjoint cuboid coverage and pitches from 0.000001 to 1,000,000 mm, plus full schema round trips for every sculpture preset.
 
-The DOM suite executes the actual page scripts in a strict `node:vm` browser contract built from `index.html`. It exercises every action button, five CAD showcase presets, all four sculpture presets, the timed gallery cycle, X/Y/Z slice axes and clipping, the printability overlay, live symmetry edits, undo/redo, imports, clipboard failure, high DPI picking, resize, keyboard focus and multiple pointers, with zero recorded console or reference errors. The plate tests decode the exported PNG's zlib stream and check its adler32 trailer, verify the plate title tracks the loaded geometry, and confirm exhibition lighting resets when sculpture mode closes. Every repository JavaScript file and any inline page script is compiled as part of the suite. These are automated DOM and geometry checks; no physical print or external slicer run is claimed.
+The DOM suite executes the actual page scripts in a strict `node:vm` browser contract built from `index.html`. It exercises every action button, five CAD showcase presets, all four sculpture presets, the timed gallery cycle, X/Y/Z slice axes with a labeled plane group, clipping, the printability overlay with overhang/floating/thin-wall legend, live symmetry edits, undo/redo, imports, clipboard failure, high DPI picking, resize, keyboard focus and multiple pointers, with zero recorded console or reference errors. The plate tests decode the exported PNG's zlib stream and check its adler32 trailer, verify the plate title tracks the loaded geometry, confirm the plate carries topology, lattice and exhibition metadata in a compressed stream, and confirm exhibition lighting resets when sculpture mode closes. Every repository JavaScript file and any inline page script is compiled as part of the suite. These are automated DOM and geometry checks; no physical print or external slicer run is claimed.
 
 ## Geometry and verification
 

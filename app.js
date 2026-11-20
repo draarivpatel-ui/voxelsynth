@@ -26,15 +26,15 @@
     selected: [0, 0, 0], hover: null, inset: null,
     undo: [], redo: [], presetName: 'deskOrganizer', verification: null, infillPercent: 100, material: 'PLA',
     artMode: false, turntable: false, turntableTimer: null, lighting: false,
-    sliceAxis: 'z', printCheck: false, printStats: null, floatingSet: null,
-    symmetry: 'off', gallery: false, galleryTimer: null, occBounds: null
+    sliceAxis: 'z', printCheck: false, printStats: null, floatingSet: null, overhangSet: null, thinSet: null,
+    symmetry: 'off', gallery: false, galleryPaused: false, galleryTimer: null, galleryOwnsTurntable: false, occBounds: null
   };
 
   var SCULPTURE_INFO = {
-    gyroidPavilion: { title: 'Minimalist Gyroid Pavilion', formula: 'sin(x)cos(y) + sin(y)cos(z) + sin(z)cos(x) = 0' },
-    mengerLantern: { title: 'Menger Sponge Lantern', formula: 'base-3 digits with at most one middle digit' },
-    helicalRibbon: { title: 'Helical Kinetic Ribbon', formula: 'theta(z) = theta0 + 2*pi*2*z / height' },
-    voronoiAmphitheater: { title: 'Voronoi Terraced Amphitheater', formula: 'height = f(nearest, second nearest seed)' }
+    gyroidPavilion: { title: 'Minimalist Gyroid Pavilion', formula: 'sin(x)cos(y) + sin(y)cos(z) + sin(z)cos(x) = 0', caption: 'A triply periodic minimal surface carved into a solid block. The winding tunnels keep the shell watertight while light passes through every window.' },
+    mengerLantern: { title: 'Menger Sponge Lantern', formula: 'base-3 digits with at most one middle digit', caption: 'A recursive cube that removes its center at every scale. What remains is a lattice of open galleries, each framed by the same rule repeated.' },
+    helicalRibbon: { title: 'Helical Kinetic Ribbon', formula: 'theta(z) = theta0 + 2*pi*2*z / height', caption: 'Three ribbons advance in fixed step with height. The sculpture freezes a rotation that would otherwise continue beyond the frame.' },
+    voronoiAmphitheater: { title: 'Voronoi Terraced Amphitheater', formula: 'height = f(nearest, second nearest seed)', caption: 'Competing seed points carve stepped terraces. Height records the distance between the nearest two sites, so the boundaries become aisles.' }
   };
 
   function numberInput(id, fallback) {
@@ -474,7 +474,9 @@
     var base = state.lighting ? (state.theme === 'dark' ? '#e0bd7d' : '#c69a55') : (cssVar('--voxel-a') || '#647382');
     var edge = state.theme === 'dark' ? '#181a1e' : '#2d333b';
     var sliceColor = cssVar('--slice') || '#d4581d';
-    var floatCol = '#d6453a', overhangCol = '#e08a2e';
+    var floatCol = state.theme === 'dark' ? '#ff7d72' : '#b3271f';
+    var overhangCol = state.theme === 'dark' ? '#ffb06a' : '#b45c00';
+    var thinCol = state.theme === 'dark' ? '#78d7e8' : '#1c6a80';
 
     drawBuildPlateCage(fit, v);
     drawGroundShadow(fit, v);
@@ -485,13 +487,17 @@
       var fill = state.wireframe ? null : shadeColor(base, face.shade);
       var stroke = state.wireframe ? base : edge;
       /* Printability overlay: red faces belong to clusters floating above
-       * the plate, orange faces are downward overhangs above z = 0. */
+       * the plate, amber faces are downward overhangs above z = 0, and blue
+       * outlines identify cells only one voxel thick along any axis. */
       if (state.printCheck && state.floatingSet) {
         var idx = face.voxel[0] + g.nx * (face.voxel[1] + g.ny * face.voxel[2]);
         if (state.floatingSet.has(idx)) { fill = floatCol; stroke = floatCol; }
-        else if (face.def.axis === 2 && face.def.sign === -1 && face.voxel[2] > 0) { fill = overhangCol; stroke = overhangCol; }
+        else if (state.overhangSet && state.overhangSet.has(idx)) { fill = overhangCol; stroke = overhangCol; }
+        else if (state.thinSet && state.thinSet.has(idx)) { stroke = thinCol; }
       }
-      drawPolygon(pts, fill, stroke, state.wireframe ? 1.0 : 0.35);
+      var lineWidth = state.wireframe ? 1.0 : 0.35;
+      if (state.printCheck && stroke === thinCol && !state.wireframe) lineWidth = 1.6;
+      drawPolygon(pts, fill, stroke, lineWidth);
       if (sameCell(face.voxel, state.hover && state.hover.voxel) || sameCell(face.voxel, state.selected)) {
         ctx.globalAlpha = 0.65; drawPolygon(pts, sliceColor, cssVar('--ink'), 1.5); ctx.globalAlpha = 1;
       }
@@ -626,6 +632,7 @@
     updateChips();
     updateInspector();
     updateArtPlate();
+    updateTourCaption();
     updateHistoryButtons();
   }
 
@@ -641,6 +648,8 @@
     var pr = V.analyzePrintability(state.grid);
     state.printStats = pr;
     state.floatingSet = new Set(pr.floatingCellIndices);
+    state.overhangSet = new Set(pr.overhangCellIndices);
+    state.thinSet = new Set(pr.thinWallCellIndices);
     var rows = [
       ['Solid voxels', fmt(s.voxelCount, 0)],
       ['Exposed faces', fmt(s.exposedFaceCount, 0)],
@@ -980,7 +989,7 @@
     loadPreset(name, true);
     state.slice = Math.floor(state.grid.nz / 2);
     state.selected[2] = state.slice;
-    updateInspector(); updateArtPlate();
+    updateInspector(); updateArtPlate(); updateTourCaption();
     showToast(infoTitle(name) + ' loaded on the editable lattice.');
   }
 
@@ -1005,28 +1014,75 @@
     }, 50);
   }
 
-  /* Gallery cycles all four sculpture presets on a turntable; any manual
-   * preset pick or mode change stops it. */
+  /* Gallery cycles all four sculpture presets on a turntable with a curator's
+   * caption for each work. Pause keeps the position; stop restores whatever
+   * turntable state the visitor had before the tour began. */
   var GALLERY_ORDER = ['gyroidPavilion', 'mengerLantern', 'helicalRibbon', 'voronoiAmphitheater'];
 
-  function stopGallery() {
-    if (state.galleryTimer !== null) { clearInterval(state.galleryTimer); state.galleryTimer = null; }
-    state.gallery = false;
-    $('gallery-toggle').setAttribute('aria-pressed', 'false');
-    $('gallery-toggle').textContent = 'Play gallery';
+  function updateTourCaption() {
+    var caption = $('tour-caption');
+    var key = sculptureKey();
+    if (!state.gallery || !key) { caption.hidden = true; caption.textContent = ''; return; }
+    var info = SCULPTURE_INFO[key];
+    var position = GALLERY_ORDER.indexOf(key) + 1;
+    caption.textContent = '';
+    var number = document.createElement('strong');
+    number.textContent = 'Work ' + position + ' / ' + GALLERY_ORDER.length;
+    var story = document.createElement('span');
+    story.textContent = info.title + '. ' + info.caption;
+    caption.appendChild(number);
+    caption.appendChild(story);
+    caption.hidden = false;
   }
 
-  function toggleGallery() {
-    if (state.gallery) { stopGallery(); return; }
-    state.gallery = true;
-    $('gallery-toggle').setAttribute('aria-pressed', 'true');
-    $('gallery-toggle').textContent = 'Stop gallery';
-    if (!state.turntable) toggleTurntable();
-    if (!sculptureKey()) loadSculpture(GALLERY_ORDER[0]);
+  function startGalleryTimer() {
     state.galleryTimer = setInterval(function () {
       var next = GALLERY_ORDER[(GALLERY_ORDER.indexOf(sculptureKey() || '') + 1) % GALLERY_ORDER.length];
       loadSculpture(next);
     }, 6500);
+  }
+
+  function stopGallery() {
+    if (state.galleryTimer !== null) { clearInterval(state.galleryTimer); state.galleryTimer = null; }
+    if (state.galleryOwnsTurntable && state.turntable) stopTurntable();
+    state.gallery = false;
+    state.galleryPaused = false;
+    state.galleryOwnsTurntable = false;
+    $('gallery-toggle').setAttribute('aria-pressed', 'false');
+    $('gallery-toggle').textContent = 'Play gallery';
+    $('gallery-exit').hidden = true;
+    updateTourCaption();
+  }
+
+  function toggleGallery() {
+    if (state.gallery && !state.galleryPaused) {
+      /* Pause: hold the current work and caption, keep the tour position. */
+      if (state.galleryTimer !== null) { clearInterval(state.galleryTimer); state.galleryTimer = null; }
+      state.galleryPaused = true;
+      $('gallery-toggle').setAttribute('aria-pressed', 'false');
+      $('gallery-toggle').textContent = 'Resume gallery';
+      updateTourCaption();
+      return;
+    }
+    if (state.gallery && state.galleryPaused) {
+      state.galleryPaused = false;
+      $('gallery-toggle').setAttribute('aria-pressed', 'true');
+      $('gallery-toggle').textContent = 'Pause gallery';
+      if (!state.turntable) { toggleTurntable(); state.galleryOwnsTurntable = true; }
+      startGalleryTimer();
+      updateTourCaption();
+      return;
+    }
+    state.gallery = true;
+    state.galleryPaused = false;
+    $('gallery-exit').hidden = false;
+    $('gallery-toggle').setAttribute('aria-pressed', 'true');
+    $('gallery-toggle').textContent = 'Pause gallery';
+    state.galleryOwnsTurntable = !state.turntable;
+    if (state.galleryOwnsTurntable) toggleTurntable();
+    if (!sculptureKey()) loadSculpture(GALLERY_ORDER[0]);
+    else updateTourCaption();
+    startGalleryTimer();
   }
 
   function toggleLighting() {
@@ -1076,27 +1132,87 @@
     return png;
   }
 
-  function zlibDeflateStore(data) {
-    var blocks = Math.ceil(data.length / 65535) || 1;
-    var out = new Uint8Array(6 + 5 * blocks + data.length);
-    out[0] = 0x78; out[1] = 0x01;
-    var pos = 2, offset = 0;
-    for (var block = 0; block < blocks; block++) {
-      var length = Math.min(65535, data.length - offset);
-      out[pos++] = block === blocks - 1 ? 1 : 0;
-      out[pos++] = length & 255; out[pos++] = (length >> 8) & 255;
-      out[pos++] = (~length) & 255; out[pos++] = ((~length) >> 8) & 255;
-      out.set(data.subarray(offset, offset + length), pos);
-      pos += length; offset += length;
-    }
+  /* Single fixed-Huffman DEFLATE block with greedy LZ77 matches. The plate is
+   * mostly flat color, so run matches shrink a 4.2 MB stored stream to a few
+   * dozen KB without adding a compression dependency. */
+  var LEN_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+  var LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+  var DIST_BASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+  var DIST_EXTRA = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+  var FIXED_LEN = (function () {
+    var codes = new Uint16Array(286), bits = new Uint8Array(286);
+    for (var i = 0; i <= 143; i++) { bits[i] = 8; codes[i] = 0x30 + i; }
+    for (var j = 144; j <= 255; j++) { bits[j] = 9; codes[j] = 0x190 + j - 144; }
+    for (var k = 256; k <= 279; k++) { bits[k] = 7; codes[k] = k - 256; }
+    for (var m = 280; m <= 287; m++) { bits[m] = 8; codes[m] = 0xc0 + m - 280; }
+    return { codes: codes, bits: bits };
+  })();
+
+  function adler32(data) {
     var a = 1, b = 0;
     for (var i = 0; i < data.length; i++) { a = (a + data[i]) % 65521; b = (b + a) % 65521; }
-    out[pos] = (b >> 8) & 255; out[pos + 1] = b & 255;
-    out[pos + 2] = (a >> 8) & 255; out[pos + 3] = a & 255;
-    return out;
+    return ((b << 16) | a) >>> 0;
   }
 
-  function zlibDeflate(data) { return zlibDeflateStore(data); }
+  function zlibDeflate(data) {
+    var bytes = [], bitBuffer = 0, bitCount = 0;
+    function put(value, count) {
+      bitBuffer |= value << bitCount; bitCount += count;
+      while (bitCount >= 8) { bytes.push(bitBuffer & 255); bitBuffer >>>= 8; bitCount -= 8; }
+    }
+    function symbol(code, length) { put(reverse(FIXED_LEN.codes[code], length), length); }
+    function reverse(value, count) {
+      var out = 0;
+      for (var i = 0; i < count; i++) { out = (out << 1) | (value & 1); value >>>= 1; }
+      return out;
+    }
+    function emitLength(length) {
+      var code = 28;
+      for (var i = 0; i < LEN_BASE.length; i++) if (length >= LEN_BASE[i] && length <= LEN_BASE[i] + (1 << LEN_EXTRA[i]) - 1) { code = i; break; }
+      symbol(257 + code, FIXED_LEN.bits[257 + code]);
+      if (LEN_EXTRA[code]) put(length - LEN_BASE[code], LEN_EXTRA[code]);
+    }
+    function emitDistance(distance) {
+      var code = 29;
+      for (var i = 0; i < DIST_BASE.length; i++) if (distance >= DIST_BASE[i] && distance <= DIST_BASE[i] + (1 << DIST_EXTRA[i]) - 1) { code = i; break; }
+      put(reverse(code, 5), 5);
+      if (DIST_EXTRA[code]) put(distance - DIST_BASE[code], DIST_EXTRA[code]);
+    }
+    put(1, 1); put(1, 2); /* BFINAL = 1, BTYPE = 01 fixed Huffman. */
+    var head = new Int32Array(32768).fill(-1), prev = new Int32Array(data.length).fill(-1);
+    var i = 0;
+    while (i < data.length) {
+      var bestLength = 0, bestDistance = 0;
+      if (i + 2 < data.length) {
+        var hash = ((data[i] << 10) ^ (data[i + 1] << 5) ^ data[i + 2]) & 32767;
+        var candidate = head[hash], attempts = 0;
+        while (candidate >= 0 && i - candidate <= 32768 && attempts++ < 96) {
+          var distance = i - candidate, limit = Math.min(258, data.length - i);
+          var length = 0;
+          while (length < limit && data[candidate + length] === data[i + length]) length++;
+          if (length >= 4 && length > bestLength) { bestLength = length; bestDistance = distance; }
+          candidate = prev[candidate];
+        }
+        prev[i] = head[hash]; head[hash] = i;
+      }
+      if (bestLength >= 4) {
+        emitLength(bestLength); emitDistance(bestDistance);
+        for (var k = 1; k < bestLength && i + k + 2 < data.length; k++) {
+          var h = ((data[i + k] << 10) ^ (data[i + k + 1] << 5) ^ data[i + k + 2]) & 32767;
+          prev[i + k] = head[h]; head[h] = i + k;
+        }
+        i += bestLength;
+      } else {
+        var value = data[i] <= 143 ? data[i] + 0x30 : 0x190 + data[i] - 144;
+        put(reverse(value, data[i] <= 143 ? 8 : 9), data[i] <= 143 ? 8 : 9);
+        i++;
+      }
+    }
+    symbol(256, FIXED_LEN.bits[256]);
+    if (bitCount) bytes.push(bitBuffer & 255);
+    var checksum = adler32(data);
+    return new Uint8Array([0x78, 0x01].concat(bytes, [(checksum >>> 24) & 255, (checksum >>> 16) & 255, (checksum >>> 8) & 255, checksum & 255]));
+  }
 
   function drawPlatePixel(pixels, width, height, x, y, color) {
     if (x < 0 || y < 0 || x >= width || y >= height) return;
@@ -1123,6 +1239,8 @@
     ',': '000000000010100', ':': '000010000010000'
   };
 
+  function plateTextWidth(text, scale) { return text.length * 4 * scale; }
+
   function drawPlateText(pixels, width, height, text, x, y, scale, color) {
     var cursor = x;
     for (var i = 0; i < text.length; i++) {
@@ -1135,19 +1253,48 @@
     }
   }
 
+  /* Word-wrap into lines that fit the measured glyph grid. */
+  function plateWrappedLines(text, maxChars) {
+    var words = String(text).toUpperCase().split(/\s+/), lines = [], line = '';
+    words.forEach(function (word) {
+      var candidate = line ? line + ' ' + word : word;
+      if (candidate.length > maxChars && line) { lines.push(line); line = word; }
+      else line = candidate;
+    });
+    if (line) lines.push(line);
+    return lines;
+  }
+
   function exportExhibitionPlate() {
     var width = 1400, height = 1000;
     var pixels = new Uint8Array(width * height * 3);
     var bg = state.lighting ? [30, 27, 21] : [24, 29, 34];
+    var frame = [state.lighting ? 38 : 33, state.lighting ? 34 : 40, state.lighting ? 26 : 46];
     var ink = state.lighting ? [232, 208, 154] : [226, 233, 238];
     var soft = state.lighting ? [165, 143, 101] : [147, 161, 172];
     var accent = state.lighting ? [220, 174, 91] : [209, 117, 67];
+    var margin = 56;
     drawPlateRect(pixels, width, height, 0, 0, width, height, bg);
-    drawPlateRect(pixels, width, height, 70, 70, width - 140, height - 140, [state.lighting ? 38 : 33, state.lighting ? 34 : 40, state.lighting ? 26 : 46]);
-    drawPlateText(pixels, width, height, 'VOXELSYNTH', 110, 112, 4, accent);
-    drawPlateText(pixels, width, height, 'SCULPTURE AND ART MODE', 110, 154, 2, soft);
+    drawPlateRect(pixels, width, height, margin, margin, width - 2 * margin, height - 2 * margin, frame);
+    drawPlateRect(pixels, width, height, margin, margin, width - 2 * margin, 2, accent);
+    drawPlateRect(pixels, width, height, margin, height - margin - 2, width - 2 * margin, 2, accent);
+    drawPlateText(pixels, width, height, 'VOXELSYNTH', 92, 92, 4, accent);
+
     var plateKey = sculptureKey();
-    drawPlateText(pixels, width, height, (plateKey ? SCULPTURE_INFO[plateKey].title : 'EDITABLE LATTICE').toUpperCase(), 110, 210, 6, ink);
+    var title = (plateKey ? SCULPTURE_INFO[plateKey].title : 'EDITABLE LATTICE').toUpperCase();
+    var titleScale = Math.max(2, Math.min(6, Math.floor((width - 184) / (title.length * 4))));
+    drawPlateText(pixels, width, height, title, 92, 146, titleScale, ink);
+    drawPlateRect(pixels, width, height, 92, 146 + titleScale * 5 + 20, width - 184, 2, soft);
+
+    if (plateKey) {
+      var info = SCULPTURE_INFO[plateKey];
+      var position = GALLERY_ORDER.indexOf(plateKey) + 1;
+      var caption = 'WORK ' + position + ' / ' + GALLERY_ORDER.length + '. ' + info.caption;
+      var capLines = plateWrappedLines(caption, 128);
+      capLines.slice(0, 3).forEach(function (line, index) {
+        drawPlateText(pixels, width, height, line, 92, 238 + index * 22, 2, soft);
+      });
+    }
 
     var fit = buildFaces();
     var points = [];
@@ -1158,9 +1305,9 @@
         minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
         minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]);
       });
-      var scale = Math.min((width - 360) / Math.max(1, maxX - minX), (height - 560) / Math.max(1, maxY - minY));
+      var scale = Math.min((width - 360) / Math.max(1, maxX - minX), (height - 610) / Math.max(1, maxY - minY));
       var ox = width / 2 - (minX + maxX) / 2 * scale;
-      var oy = 475 - (minY + maxY) / 2 * scale;
+      var oy = 500 - (minY + maxY) / 2 * scale;
       var depth = points.map(function (p) { return p[2]; }).sort(function (a, b) { return a - b; });
       var midDepth = depth[Math.floor(depth.length / 2)] || 0;
       state.faces.forEach(function (face) {
@@ -1179,13 +1326,29 @@
         }
       });
     }
+
     var stats = state.mesh.stats;
+    var g = state.grid;
     var badge = stats.watertight ? 'WATERTIGHT' : 'CHECK TOPOLOGY';
-    drawPlateRect(pixels, width, height, 110, height - 300, 530, 2, accent);
-    drawPlateText(pixels, width, height, 'VOXELS ' + fmt(stats.voxelCount, 0), 110, height - 270, 3, ink);
-    drawPlateText(pixels, width, height, 'AREA ' + fmt(stats.surfaceAreaMm2, 1) + ' MM2', 110, height - 220, 3, ink);
-    drawPlateText(pixels, width, height, 'VOLUME ' + fmt(stats.volumeCm3, 2) + ' CM3', 110, height - 170, 3, ink);
-    drawPlateText(pixels, width, height, badge, 800, height - 160, 4, stats.watertight ? accent : [220, 90, 70]);
+    var topY = height - 286;
+    drawPlateRect(pixels, width, height, 92, topY, width - 184, 2, accent);
+    var left = [
+      'VOXELS ' + fmt(stats.voxelCount, 0),
+      'AREA ' + fmt(stats.surfaceAreaMm2, 1) + ' MM2',
+      'VOLUME ' + fmt(stats.volumeCm3, 2) + ' CM3',
+      'TRIANGLES ' + fmt(stats.triangleCount, 0)
+    ];
+    var right = [
+      'EULER X ' + fmt(stats.eulerCharacteristic, 0),
+      'GENUS G ' + (stats.genusEstimate === null ? 'NA' : fmt(stats.genusEstimate, 0)),
+      'LATTICE ' + g.nx + ' X ' + g.ny + ' X ' + g.nz,
+      'PITCH ' + fmt(g.pitchMm, 3) + ' MM'
+    ];
+    left.forEach(function (line, index) { drawPlateText(pixels, width, height, line, 92, topY + 24 + index * 42, 3, ink); });
+    right.forEach(function (line, index) { drawPlateText(pixels, width, height, line, 720, topY + 24 + index * 42, 3, ink); });
+    drawPlateRect(pixels, width, height, 92, height - 100, width - 184, 2, soft);
+    drawPlateText(pixels, width, height, 'SIX VERIFIED EXPORT FORMATS', 92, height - 78, 2, soft);
+    drawPlateText(pixels, width, height, badge, width - 92 - plateTextWidth(badge, 3), height - 82, 3, stats.watertight ? accent : [220, 90, 70]);
     var bytes = encodePNG(width, height, pixels);
     downloadBlob(new Blob([bytes], { type: 'image/png' }), safeName() + '-plate.png');
     showToast('Exhibition plate exported at 1400 x 1000 PNG.');
@@ -1311,6 +1474,7 @@
       button.addEventListener('click', protectedAction(function () { stopGallery(); loadSculpture(button.dataset.sculpture); }));
     });
     on('gallery-toggle', 'click', toggleGallery);
+    on('gallery-exit', 'click', function () { stopGallery(); showToast('Gallery tour closed. Your turntable state was restored.'); });
     document.querySelectorAll('[data-sym]').forEach(function (button) {
       button.addEventListener('click', function () { setSymmetry(button.dataset.sym); });
     });
@@ -1359,7 +1523,8 @@
     });
     on('toggle-print', 'click', function () {
       state.printCheck = !state.printCheck; this.setAttribute('aria-pressed', String(state.printCheck));
-      if (state.printCheck) showToast('Printability view: overhang undersides amber, floating clusters red.');
+      $('print-legend').hidden = !state.printCheck;
+      if (state.printCheck) showToast('Printability view: amber undersides need support, red clusters float, blue outlines mark thin walls.');
       render();
     });
     on('cycle-slice-mode', 'click', function () {
@@ -1496,6 +1661,9 @@
     state.theme = stored === 'dark' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', state.theme);
     $('theme-toggle').textContent = state.theme === 'dark' ? 'Light theme' : 'Dark theme';
+    /* On phone-width screens keep the long diagnostics table behind its
+     * summary so controls stay within reach; the full table remains one tap. */
+    if (window.innerWidth <= 540) document.querySelectorAll('.diagnostics-details').forEach(function (details) { details.open = false; });
     syncLatticeInputs(); bindEvents(); recompute(); setArtMode(false);
     window.VoxelSynthStudio = {
       snapshot: function () { return V.serializeGrid(state.grid); },
@@ -1505,7 +1673,8 @@
         inset: Object.assign({}, state.inset), faceCount: state.faces.length, sliceOnly: state.sliceOnly, showSlice: state.showSlice,
         stats: Object.assign({}, state.mesh.stats), history: { undo: state.undo.length, redo: state.redo.length },
         artMode: state.artMode, sculpture: sculptureKey(), turntable: state.turntable, lighting: state.lighting,
-        symmetry: state.symmetry, gallery: state.gallery, printCheck: state.printCheck,
+        symmetry: state.symmetry, gallery: state.gallery, galleryPaused: state.galleryPaused,
+        galleryOwnsTurntable: state.galleryOwnsTurntable, printCheck: state.printCheck,
         print: state.printStats ? {
           printable: state.printStats.printable, overhangCells: state.printStats.overhangCells,
           floatingClusters: state.printStats.floatingClusters, thinWallCells: state.printStats.thinWallCells,

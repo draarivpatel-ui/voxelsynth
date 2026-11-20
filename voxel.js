@@ -753,19 +753,21 @@
     }
 
     var overhangCells = 0, thinX = 0, thinY = 0, thinZ = 0, thinWallCells = 0;
+    var overhangCellIndices = [], thinWallCellIndices = [];
     for (var z2 = 0; z2 < nz; z2++) {
       for (var y2 = 0; y2 < ny; y2++) {
         for (var x2 = 0; x2 < nx; x2++) {
           if (!getVoxel(grid, x2, y2, z2)) continue;
+          var index2 = x2 + nx * (y2 + ny * z2);
           var below = getVoxel(grid, x2, y2, z2 - 1);
-          if (z2 > 0 && !below) overhangCells++;
+          if (z2 > 0 && !below) { overhangCells++; overhangCellIndices.push(index2); }
           var thinA = !getVoxel(grid, x2 - 1, y2, z2) && !getVoxel(grid, x2 + 1, y2, z2);
           var thinB = !getVoxel(grid, x2, y2 - 1, z2) && !getVoxel(grid, x2, y2 + 1, z2);
           var thinC = !below && !getVoxel(grid, x2, y2, z2 + 1);
           if (thinA) thinX++;
           if (thinB) thinY++;
           if (thinC) thinZ++;
-          if (thinA || thinB || thinC) thinWallCells++;
+          if (thinA || thinB || thinC) { thinWallCells++; thinWallCellIndices.push(index2); }
         }
       }
     }
@@ -775,10 +777,12 @@
       solidComponents: clusterCount,
       overhangCells: overhangCells,
       overhangAreaMm2: overhangCells * p * p,
+      overhangCellIndices: overhangCellIndices,
       floatingClusters: floatingClusters,
       floatingCells: floatingCellIndices.length,
       floatingCellIndices: floatingCellIndices,
       thinWallCells: thinWallCells,
+      thinWallCellIndices: thinWallCellIndices,
       thinX: thinX,
       thinY: thinY,
       thinZ: thinZ,
