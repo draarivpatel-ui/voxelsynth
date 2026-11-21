@@ -41,6 +41,35 @@ function glbParts(glb) {
   return { gltf: JSON.parse(text), bin: glb.slice(start + 8, start + 8 + binLength) };
 }
 
+/* Triangle-level STL builders let tests assemble shells an exporter would
+ * never emit: disconnected pieces, inward shells and doubled sheets. */
+function cubeTris(x, y, z, s, inward) {
+  const p = [[x, y, z], [x + s, y, z], [x + s, y + s, z], [x, y + s, z],
+    [x, y, z + s], [x + s, y, z + s], [x + s, y + s, z + s], [x, y + s, z + s]];
+  const faces = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [0, 4, 7, 3], [1, 2, 6, 5]];
+  const tris = [];
+  for (const [a, b, c, d] of faces) tris.push([p[a], p[b], p[c]], [p[a], p[c], p[d]]);
+  return inward ? tris.map(([a, b, c]) => [a, c, b]) : tris;
+}
+
+function doubledSquareTris(x, y, z, s) {
+  const p = [[x, y, z], [x + s, y, z], [x + s, y + s, z], [x, y + s, z]];
+  return [[p[0], p[1], p[2]], [p[0], p[2], p[3]], [p[1], p[3], p[2]], [p[1], p[0], p[3]]];
+}
+
+function binarySTL(tris) {
+  const out = new Uint8Array(84 + tris.length * 50), view = new DataView(out.buffer);
+  view.setUint32(80, tris.length, true);
+  tris.forEach((tri, i) => {
+    const off = 84 + i * 50, [a, b, c] = tri;
+    const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    const l = Math.hypot(n[0], n[1], n[2]);
+    [...n.map(v => v / l), ...a, ...b, ...c].forEach((v, k) => view.setFloat32(off + k * 4, v, true));
+  });
+  return out;
+}
+
 /* ----------------------------- SHA-256 ------------------------------- */
 
 test('SHA-256 matches published vectors for empty and short inputs', () => {
@@ -546,6 +575,97 @@ test('a legitimate nested cavity shell keeps a positive net volume and still pas
   const cavityReport = V.auditExportFile(V.exportAsciiSTL(V.extractManifoldMesh(cavity), 'cavity'), 'cavity.stl');
   assert.equal(cavityReport.verdict, 'PASS');
   assert.equal(cavityReport.mesh.surfaceComponents, 2);
+});
+
+test('a positive net volume cannot hide a disconnected inward shell', () => {
+  /* Sol probe: an outward 2 mm cube plus a separate inward 1 mm cube reads
+   * +7 mm3 in aggregate, yet the small shell is unenclosed and invalid. */
+  const stl = binarySTL([...cubeTris(0, 0, 0, 2, false), ...cubeTris(10, 0, 0, 1, true)]);
+  const report = V.auditExportFile(stl, 'hidden.stl');
+  assert.equal(report.verdict, 'FAIL');
+  assert.equal(report.mesh.surfaceComponents, 2);
+  assert.ok(report.mesh.volumeMm3 > 0);
+  assert.deepEqual(report.mesh.componentVolumesMm3.map(v => Math.round(v * 1000) / 1000), [8, -1]);
+  assert.match(report.failures.join(' '), /outside any outer shell|nested inner cavity/);
+});
+
+test('a closed doubled sheet fails per component even beside positive volume', () => {
+  /* Two coplanar squares on opposite diagonals form a watertight component
+   * with exactly zero enclosed volume, so the verdict cannot ride on the
+   * neighbouring cube. */
+  const stl = binarySTL([...cubeTris(0, 0, 0, 2, false), ...doubledSquareTris(10, 0, 0, 2)]);
+  const report = V.auditExportFile(stl, 'sheet.stl');
+  assert.equal(report.verdict, 'FAIL');
+  assert.equal(report.mesh.boundaryEdges, 0);
+  assert.equal(report.mesh.componentVolumesMm3.length, 2);
+  assert.ok(Math.abs(report.mesh.componentVolumesMm3[1]) <= 1e-9);
+  assert.match(report.failures.join(' '), /encloses no volume|not a solid shell/);
+});
+
+test('nested cavity parity still passes through the per-component verdict', () => {
+  const stl = binarySTL([...cubeTris(0, 0, 0, 4, false), ...cubeTris(1, 1, 1, 2, true)]);
+  const report = V.auditExportFile(stl, 'nested.stl');
+  assert.equal(report.verdict, 'PASS', report.failures.join(' | '));
+  assert.equal(report.mesh.surfaceComponents, 2);
+  const deep = binarySTL([...cubeTris(0, 0, 0, 10, false), ...cubeTris(2, 2, 2, 6, true), ...cubeTris(4, 4, 4, 2, false)]);
+  assert.equal(V.auditExportFile(deep, 'deep.stl').verdict, 'PASS');
+  const twoCavities = binarySTL([...cubeTris(0, 0, 0, 10, false), ...cubeTris(1, 1, 1, 2, true), ...cubeTris(6, 6, 6, 2, true)]);
+  assert.equal(V.auditExportFile(twoCavities, 'pair.stl').verdict, 'PASS');
+  const wrongDepth = binarySTL([...cubeTris(0, 0, 0, 10, false), ...cubeTris(2, 2, 2, 6, true), ...cubeTris(3, 3, 3, 2, true)]);
+  assert.equal(V.auditExportFile(wrongDepth, 'wrongdepth.stl').verdict, 'FAIL');
+});
+
+test('a positive shell nested inside a positive shell fails the parity rule', () => {
+  /* An outward cube fully inside another outward cube reads +64 mm3 of
+   * redundant interior geometry under either interpretation; nesting
+   * depth must alternate sign, so an odd-depth positive shell is invalid. */
+  const stl = binarySTL([...cubeTris(0, 0, 0, 10, false), ...cubeTris(2, 2, 2, 4, false)]);
+  const report = V.auditExportFile(stl, 'posinpos.stl');
+  assert.equal(report.verdict, 'FAIL');
+  assert.deepEqual(report.mesh.componentVolumesMm3.map(v => Math.round(v)), [1000, 64]);
+  assert.match(report.failures.join(' '), /redundant interior geometry|valid cavity wall/);
+  const triple = binarySTL([...cubeTris(0, 0, 0, 12, false), ...cubeTris(2, 2, 2, 8, false), ...cubeTris(4, 4, 4, 4, false)]);
+  assert.equal(V.auditExportFile(triple, 'triple.stl').verdict, 'FAIL');
+});
+
+test('touching or crossing components fail as an invalid disjoint pair', () => {
+  /* Strict enclosure requires zero contact: interpenetrating solids,
+   * a cavity wall flush with the outer face, and a shell straddling the
+   * boundary all share triangle surface with another component. */
+  const crossing = binarySTL([...cubeTris(0, 0, 0, 4, false), ...cubeTris(2, 2, 2, 4, false)]);
+  const crossReport = V.auditExportFile(crossing, 'crossing.stl');
+  assert.equal(crossReport.verdict, 'FAIL');
+  assert.match(crossReport.failures.join(' '), /intersect or touch/);
+  const flush = binarySTL([...cubeTris(0, 0, 0, 10, false), ...cubeTris(0, 2, 2, 5, true)]);
+  assert.equal(V.auditExportFile(flush, 'flush.stl').verdict, 'FAIL');
+  const straddle = binarySTL([...cubeTris(0, 0, 0, 4, false), ...cubeTris(3, 1, 1, 2, true)]);
+  assert.equal(V.auditExportFile(straddle, 'straddle.stl').verdict, 'FAIL');
+});
+
+test('an empty active glTF scene reports EMPTY instead of auditing the mesh library', () => {
+  const mesh = V.extractManifoldMesh(box(4, 4, 4));
+  const { gltf, bin } = glbParts(V.exportGLB(mesh, 'cube'));
+  const empty = JSON.parse(JSON.stringify(gltf));
+  empty.scene = 0;
+  empty.scenes = [{}];
+  delete empty.nodes;
+  const report = V.auditExportFile(buildContainer(empty, bin), 'empty-scene.glb');
+  assert.equal(report.verdict, 'EMPTY');
+  assert.match(report.failures.join(' '), /no solid geometry/);
+  const emptyNodes = JSON.parse(JSON.stringify(gltf));
+  emptyNodes.scene = 0;
+  emptyNodes.scenes = [{ nodes: [] }];
+  delete emptyNodes.nodes;
+  assert.equal(V.auditExportFile(buildContainer(emptyNodes, bin), 'empty-nodes.glb').verdict, 'EMPTY');
+  const unreferenced = JSON.parse(JSON.stringify(gltf));
+  unreferenced.scene = 0;
+  unreferenced.scenes = [{ nodes: [] }];
+  assert.equal(V.auditExportFile(buildContainer(unreferenced, bin), 'unreferenced.glb').verdict, 'EMPTY');
+  const nonscene = JSON.parse(JSON.stringify(gltf));
+  delete nonscene.scene;
+  delete nonscene.scenes;
+  delete nonscene.nodes;
+  assert.equal(V.auditExportFile(buildContainer(nonscene, bin), 'nonscene.glb').verdict, 'PASS');
 });
 
 test('empty project JSON, empty OBJ and empty VOX report EMPTY rather than a geometry pass', () => {

@@ -585,6 +585,51 @@
       if (seen.size !== graph.size || Array.from(degree.values()).some(function (n) { return n !== 2; })) nonManifoldVertices++;
     });
     var components = new Set(triangles.map(function (_, i) { return find(i); })).size;
+    /* Per-component geometry: each connected shell carries its own signed
+     * volume, area, bounds, closure flag and a few well spread sample
+     * points, so a positive net volume can never hide an invalid
+     * disconnected shell. */
+    var componentDetails = [];
+    var componentIndex = new Map();
+    triangles.forEach(function (ids, t) {
+      var root = find(t);
+      if (!componentIndex.has(root)) {
+        componentIndex.set(root, componentDetails.length);
+        componentDetails.push({
+          triangles: [], vertexIds: new Set(), reference: null,
+          surfaceAreaMm2: 0, volumeMm3: 0, closed: true,
+          lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity]
+        });
+      }
+      var detail = componentDetails[componentIndex.get(root)];
+      detail.triangles.push(t);
+      var a = vertices[ids[0]], b = vertices[ids[1]], c = vertices[ids[2]];
+      if (detail.reference === null) detail.reference = a;
+      var r = detail.reference;
+      detail.surfaceAreaMm2 += length3(cross3(sub3(b, a), sub3(c, a))) / 2;
+      detail.volumeMm3 += dot3(sub3(a, r), cross3(sub3(b, r), sub3(c, r))) / 6;
+      for (var e = 0; e < 3; e++) detail.vertexIds.add(ids[e]);
+    });
+    edges.forEach(function (edge) {
+      var detail = componentDetails[componentIndex.get(find(edge.triangle))];
+      if (edge.count !== 2 || edge.balance !== 0) detail.closed = false;
+    });
+    componentDetails.forEach(function (detail) {
+      var ids = Array.from(detail.vertexIds).sort(function (a, b) { return a - b; });
+      var centroid = [0, 0, 0];
+      ids.forEach(function (u) {
+        for (var d = 0; d < 3; d++) {
+          centroid[d] += vertices[u][d];
+          detail.lo[d] = Math.min(detail.lo[d], vertices[u][d]);
+          detail.hi[d] = Math.max(detail.hi[d], vertices[u][d]);
+        }
+      });
+      detail.samples = [centroid.map(function (n) { return n / ids.length; })];
+      for (var s = 0; s < 4 && s < ids.length; s++) {
+        detail.samples.push(vertices[ids[Math.floor((s * ids.length) / 4)]]);
+      }
+      delete detail.vertexIds;
+    });
     var chi = links.size - edges.size + triangles.length;
     var manifold = triangles.length > 0 && unmatched === 0 && nonManifoldVertices === 0 && duplicateTriangles === 0;
     return {
@@ -597,6 +642,7 @@
       boundingBoxMm: { min: lo, max: hi, size: hi.map(function (n, i) { return n - lo[i]; }) },
       eulerCharacteristic: chi,
       surfaceComponents: components,
+      componentDetails: componentDetails,
       genusEstimate: manifold ? (2 * components - chi) / 2 : null,
       watertight: manifold,
       boundaryEdges: boundary,
@@ -1669,12 +1715,25 @@
       stack.delete(index);
     }
     var roots = [];
-    if (Array.isArray(gltf.scenes) && gltf.scenes.length) {
+    if (gltf.scenes !== undefined && !Array.isArray(gltf.scenes)) {
+      throw new TypeError('glTF scenes must be an array of scene objects');
+    }
+    var hasSceneGraph = Array.isArray(gltf.scenes) && gltf.scenes.length;
+    if (hasSceneGraph) {
       var sceneIndex = gltf.scene === undefined ? 0 : gltf.scene;
       if (!Number.isInteger(sceneIndex) || sceneIndex < 0 || sceneIndex >= gltf.scenes.length) {
         throw new TypeError('glTF scene index is out of range');
       }
       var scene = gltf.scenes[sceneIndex];
+      if (!scene || typeof scene !== 'object' || Array.isArray(scene)) {
+        throw new TypeError('glTF scene must be an object');
+      }
+      if (scene.nodes !== undefined && !Array.isArray(scene.nodes)) {
+        throw new TypeError('glTF scene nodes must be node indices');
+      }
+      /* A declared scene is authoritative: a missing or empty nodes list
+       * instances nothing, so unreferenced meshes stay uncounted and the
+       * audit reports an empty scene rather than a library of parts. */
       roots = scene && Array.isArray(scene.nodes) ? scene.nodes : [];
       if (!roots.every(Number.isInteger)) throw new TypeError('glTF scene nodes must be node indices');
     } else if (Array.isArray(gltf.nodes)) {
@@ -1684,7 +1743,7 @@
       });
       gltf.nodes.forEach(function (node, index) { if (!hasParent[index]) roots.push(index); });
     }
-    if (!roots.length && !Array.isArray(gltf.nodes)) {
+    if (!hasSceneGraph && !roots.length && !Array.isArray(gltf.nodes)) {
       gltf.meshes.forEach(function (_, index) { emitMesh(index, matIdentity()); });
     } else {
       roots.forEach(function (index) { visitNode(index, matIdentity(), new Set()); });
@@ -1786,6 +1845,169 @@
     return { id: 'unrecognized', name: 'Unrecognized' };
   }
 
+  /* Even-odd ray casting decides whether a point sits inside a closed
+   * triangle shell: an odd crossing count means inside. A ray grazing a
+   * vertex, an edge or a face plane gives an ambiguous count, so the test
+   * walks a fixed set of well separated directions and keeps the first
+   * clean answer. */
+  var SHELL_RAY_DIRECTIONS = [
+    [1, 0.3713906763541037, 0.5488212999484521],
+    [0.2713235294618793, 1, 0.6933752452815364],
+    [0.8320502943378437, 0.4545194696557315, 1]
+  ];
+
+  function pointInsideShell(point, mesh, triangleIds) {
+    for (var di = 0; di < SHELL_RAY_DIRECTIONS.length; di++) {
+      var dir = SHELL_RAY_DIRECTIONS[di];
+      var hits = 0, ambiguous = false;
+      for (var k = 0; k < triangleIds.length && !ambiguous; k++) {
+        var tri = mesh.triangles[triangleIds[k]];
+        var a = mesh.vertices[tri[0]], b = mesh.vertices[tri[1]], c = mesh.vertices[tri[2]];
+        var e1 = sub3(b, a), e2 = sub3(c, a);
+        var pvec = cross3(dir, e2);
+        var det = dot3(e1, pvec);
+        var tv = sub3(point, a);
+        if (Math.abs(det) < 1e-12) {
+          var n = cross3(e1, e2), nl = length3(n);
+          if (nl > 0 && Math.abs(dot3(n, tv)) / nl < 1e-7) ambiguous = true;
+          continue;
+        }
+        var inv = 1 / det;
+        var u = dot3(tv, pvec) * inv;
+        var qv = cross3(tv, e1);
+        var v = dot3(dir, qv) * inv;
+        var w = 1 - u - v;
+        var t = dot3(e2, qv) * inv;
+        if (t <= 1e-9) continue;
+        /* A barycentric coordinate well below zero is a clean miss; only a
+         * coordinate inside the tolerance band means the ray grazed an
+         * edge or vertex, which makes this direction's count ambiguous. */
+        if (u < -1e-7 || v < -1e-7 || w < -1e-7) continue;
+        if (u < 1e-7 || v < 1e-7 || w < 1e-7 || t < 1e-7) ambiguous = true;
+        else hits++;
+      }
+      if (!ambiguous) return hits % 2 === 1;
+    }
+    return false;
+  }
+
+  /* Triangle-triangle contact test by separating axis: two triangles fail
+   * to intersect only when one of the eleven candidate axes (both face
+   * normals plus the nine edge-pair cross products) separates their
+   * projections. Touching counts as intersecting, because a cavity wall
+   * that shares area or contact with its outer shell is not strictly
+   * enclosed by it. */
+  function triTriHit(a1, b1, c1, a2, b2, c2) {
+    var edges = [
+      sub3(b1, a1), sub3(c1, a1), sub3(c1, b1),
+      sub3(b2, a2), sub3(c2, a2), sub3(c2, b2)
+    ];
+    var axes = [cross3(edges[0], edges[1]), cross3(edges[3], edges[4])];
+    for (var i = 0; i < 3; i++) {
+      for (var j = 3; j < 6; j++) axes.push(cross3(edges[i], edges[j]));
+    }
+    for (var k = 0; k < axes.length; k++) {
+      var ax = axes[k];
+      if (ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2] < 1e-24) continue;
+      var lo1 = Math.min(dot3(a1, ax), dot3(b1, ax), dot3(c1, ax));
+      var hi1 = Math.max(dot3(a1, ax), dot3(b1, ax), dot3(c1, ax));
+      var lo2 = Math.min(dot3(a2, ax), dot3(b2, ax), dot3(c2, ax));
+      var hi2 = Math.max(dot3(a2, ax), dot3(b2, ax), dot3(c2, ax));
+      if (hi1 < lo2 - 1e-9 || hi2 < lo1 - 1e-9) return false;
+    }
+    return true;
+  }
+
+  /* Component `inner` counts as enclosed by `outer` only when the outer
+   * shell is itself a real closed volume, the inner bounding box sits
+   * inside it, and a real inner vertex proves inside by ray parity. The
+   * caller has already established that no inner triangle touches any
+   * outer triangle, so every sample point shares one containment state
+   * and any single clean answer suffices. */
+  function componentContains(outer, inner, mesh) {
+    var eps = 1e-9 * Math.pow(outer.surfaceAreaMm2, 1.5);
+    if (!outer.closed || Math.abs(outer.volumeMm3) <= eps) return false;
+    for (var d = 0; d < 3; d++) {
+      if (inner.lo[d] < outer.lo[d] - 1e-6 || inner.hi[d] > outer.hi[d] + 1e-6) return false;
+    }
+    return inner.samples.some(function (point) {
+      return pointInsideShell(point, mesh, outer.triangles);
+    });
+  }
+
+  /* Per-component verdicts the aggregate checks cannot see. Every pair of
+   * components is classified once: intersecting shells are not a valid
+   * disjoint pair, and for non-touching pairs containment is proved
+   * geometrically rather than sampled. A valid solid then alternates sign
+   * with nesting depth: even depth (including unenclosed) demands a
+   * positive shell, odd depth a negative one. */
+  function componentShellFindings(mesh, details) {
+    var findings = [];
+    var containers = details.map(function () { return []; });
+    var triLo = mesh.triangles.map(function (ids) {
+      var a = mesh.vertices[ids[0]], b = mesh.vertices[ids[1]], c = mesh.vertices[ids[2]];
+      return [Math.min(a[0], b[0], c[0]), Math.min(a[1], b[1], c[1]), Math.min(a[2], b[2], c[2])];
+    });
+    var triHi = mesh.triangles.map(function (ids) {
+      var a = mesh.vertices[ids[0]], b = mesh.vertices[ids[1]], c = mesh.vertices[ids[2]];
+      return [Math.max(a[0], b[0], c[0]), Math.max(a[1], b[1], c[1]), Math.max(a[2], b[2], c[2])];
+    });
+    for (var i = 0; i < details.length; i++) {
+      for (var j = i + 1; j < details.length; j++) {
+        var A = details[i], B = details[j];
+        var overlapping = A.lo[0] <= B.hi[0] + 1e-9 && B.lo[0] <= A.hi[0] + 1e-9 &&
+          A.lo[1] <= B.hi[1] + 1e-9 && B.lo[1] <= A.hi[1] + 1e-9 &&
+          A.lo[2] <= B.hi[2] + 1e-9 && B.lo[2] <= A.hi[2] + 1e-9;
+        if (!overlapping) continue;
+        /* Sweep on the x axis so only triangle pairs whose boxes overlap
+         * reach the full separating-axis test. */
+        var ta = A.triangles.slice().sort(function (a, b) { return triLo[a][0] - triLo[b][0]; });
+        var tb = B.triangles.slice().sort(function (a, b) { return triLo[a][0] - triLo[b][0]; });
+        var touching = false;
+        for (var x = 0; x < ta.length && !touching; x++) {
+          var t1 = ta[x], lo1 = triLo[t1], hi1 = triHi[t1];
+          for (var y = 0; y < tb.length; y++) {
+            var t2 = tb[y], lo2 = triLo[t2], hi2 = triHi[t2];
+            if (lo2[0] > hi1[0] + 1e-9) break;
+            if (hi2[0] < lo1[0] - 1e-9 ||
+                lo1[1] > hi2[1] + 1e-9 || lo2[1] > hi1[1] + 1e-9 ||
+                lo1[2] > hi2[2] + 1e-9 || lo2[2] > hi1[2] + 1e-9) continue;
+            var u = mesh.triangles[t1], w = mesh.triangles[t2];
+            if (triTriHit(mesh.vertices[u[0]], mesh.vertices[u[1]], mesh.vertices[u[2]],
+                          mesh.vertices[w[0]], mesh.vertices[w[1]], mesh.vertices[w[2]])) {
+              touching = true;
+              break;
+            }
+          }
+        }
+        if (touching) {
+          findings.push('Surface components ' + (i + 1) + ' and ' + (j + 1) +
+            ' intersect or touch: shells that share surface are not a valid disjoint pair');
+          continue;
+        }
+        if (componentContains(A, B, mesh)) containers[j].push(i);
+        else if (componentContains(B, A, mesh)) containers[i].push(j);
+      }
+    }
+    details.forEach(function (comp, ci) {
+      var eps = 1e-9 * Math.pow(comp.surfaceAreaMm2, 1.5);
+      if (Math.abs(comp.volumeMm3) <= eps) {
+        findings.push('Surface component ' + (ci + 1) + ' encloses ' + comp.volumeMm3 +
+          ' mm3: a doubled or collapsed sheet encloses no volume and is not a solid shell');
+      } else {
+        var depth = containers[ci].length;
+        var positive = comp.volumeMm3 > 0;
+        if (positive === (depth % 2 === 1)) {
+          findings.push('Surface component ' + (ci + 1) + ' encloses ' + comp.volumeMm3 +
+            (positive
+              ? ' mm3 inside another shell: a nested outward shell is redundant interior geometry, not a valid cavity wall'
+              : ' mm3 of inward volume outside any outer shell: a negative shell is only valid as a nested inner cavity'));
+        }
+      }
+    });
+    return findings;
+  }
+
   /* Counted audit of one parsed mesh: Euler characteristic, genus from
    * chi = 2 * (components - g), degenerate facets and non-unit declared
    * normals, area, divergence volume and the bounding box proof. */
@@ -1817,7 +2039,9 @@
       surfaceAreaMm2: a.surfaceAreaMm2,
       volumeMm3: a.volumeMm3,
       volumeCm3: a.volumeCm3,
-      boundingBoxMm: a.boundingBoxMm
+      boundingBoxMm: a.boundingBoxMm,
+      componentVolumesMm3: a.componentDetails.map(function (c) { return c.volumeMm3; }),
+      shellFindings: componentShellFindings(mesh, a.componentDetails)
     };
   }
 
@@ -1892,6 +2116,9 @@
      * encloses nothing. Nested cavity shells stay valid because their
      * inward area only subtracts from a larger outward volume. */
     if (!(m.volumeMm3 > 0)) report.failures.push('Net signed volume is ' + m.volumeMm3 + ' mm3, not positive; a valid solid encloses positive volume with outward faces');
+    /* The same verdict applies per connected component: a positive net can
+     * never mask an unenclosed inward or degenerate shell. */
+    (m.shellFindings || []).forEach(function (finding) { report.failures.push(finding); });
     if (m.boundaryEdges) report.failures.push(m.boundaryEdges + ' boundary edge(s) break the closed surface');
     if (m.nonManifoldEdges) report.failures.push(m.nonManifoldEdges + ' edge(s) carry more than two facets');
     if (m.nonManifoldVertices) report.failures.push(m.nonManifoldVertices + ' vertex link(s) fail to close into one ring');
