@@ -162,6 +162,12 @@ input[type="number"], input[type="text"], select { width: 100%; min-width: 0; he
 .subhead { margin: 18px 0 8px; font-size: 12px; font-weight: 650; }
 .verification-result { font: 12px/1.7 var(--mono); color: var(--ink-soft); margin-top: 10px; overflow-wrap: anywhere; }
 .verification-result.good { color: var(--good); padding: 8px; border: 1px solid var(--good); border-radius: 6px; background: var(--good-bg); }
+.verification-result.bad { color: var(--warn); padding: 8px; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-bg); }
+.audit-result { white-space: pre-line; }
+.audit-drop { margin-top: 10px; padding: 10px; border: 1px dashed var(--line-strong); border-radius: 8px; }
+.audit-drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.audit-drop .btn-block { margin-top: 0; }
+.audit-drop .field-note { margin-bottom: 0; }
 .wide-input { display: block; margin: 5px 0 10px; }
 .export-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .export-section .control-details { margin-top: 12px; }

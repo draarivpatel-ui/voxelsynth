@@ -10,6 +10,7 @@
   var state = {
     grid: null,
     mesh: null,
+    audit: null,
     yawDeg: 35,
     pitchDeg: 28,
     slice: 0,
@@ -748,6 +749,14 @@
     showToast.timer = setTimeout(function () { toast.hidden = true; }, 2600);
   }
 
+  /* Screen reader announcements for actions that change state without a
+   * visible toast. The trailing space toggle repeats identical messages. */
+  var lastAnnouncement = null;
+  function announce(message) {
+    lastAnnouncement = lastAnnouncement === message ? message + ' ' : message;
+    $('live-announcer').textContent = lastAnnouncement;
+  }
+
   function downloadBlob(blob, filename) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -787,6 +796,7 @@
     }
     var parsed = kind === 'binary-stl' ? V.parseBinarySTL(payload) :
       kind === 'ply' ? V.parsePLY(payload) :
+      kind === 'glb' ? V.parseGLB(payload) :
       kind === 'obj' ? V.parseOBJ(payload) : V.parseAsciiSTL(payload);
     var stats = V.analyzeMesh(parsed), original = state.mesh.stats;
     if (!stats.watertight || stats.triangleCount !== original.triangleCount ||
@@ -797,17 +807,19 @@
 
   function handleExport(kind) {
     var base = safeName();
-    if (kind === 'binary-stl' || kind === 'ply' || kind === 'vox') {
+    if (kind === 'binary-stl' || kind === 'ply' || kind === 'vox' || kind === 'glb') {
       if (kind !== 'vox') requireGeometry();
       var bytes = kind === 'binary-stl' ? V.exportBinarySTL(state.mesh, base) :
-        kind === 'ply' ? V.exportPLY(state.mesh, base) : V.exportVOX(state.grid);
+        kind === 'ply' ? V.exportPLY(state.mesh, base) :
+        kind === 'glb' ? V.exportGLB(state.mesh, base) : V.exportVOX(state.grid);
       verifyPayload(kind, bytes);
       var ext = kind === 'binary-stl' ? 'stl' : kind;
-      var mime = kind === 'vox' ? 'application/octet-stream' : 'model/' + ext;
+      var mime = kind === 'vox' ? 'application/octet-stream' : kind === 'glb' ? 'model/gltf-binary' : 'model/' + ext;
       downloadBlob(new Blob([bytes], { type: mime }), base + '.' + ext);
       var detail = kind === 'vox' ? state.grid.data.length + ' cells.' :
         state.mesh.triangles.length + ' facets.';
-      showToast((kind === 'binary-stl' ? 'Binary STL' : ext.toUpperCase()) + ' verified and downloaded. ' + detail);
+      var label = kind === 'binary-stl' ? 'Binary STL' : kind === 'glb' ? 'Binary glTF' : ext.toUpperCase();
+      showToast(label + ' verified and downloaded. ' + detail);
       return;
     }
     if (kind !== 'json') requireGeometry();
@@ -838,6 +850,49 @@
       if (document.execCommand('copy') !== true) throw new Error('Clipboard unavailable. Download the file instead.');
       done();
     } finally { ta.remove(); }
+  }
+
+  /* The export auditor recounts a file's topology with the strict readers
+   * and stores the last verdict so the proof report can be downloaded. */
+  function auditBytes(bytes, name) {
+    var report = V.auditExportFile(bytes, name || 'export');
+    state.audit = report;
+    var el = $('audit-result');
+    var lines = [report.verdict + ': ' + report.file.name + ' (' + report.file.formatName + ', ' + fmt(report.file.bytes, 0) + ' bytes)'];
+    if (report.verdict === 'PASS') {
+      var m = report.mesh;
+      lines.push(fmt(m.vertices, 0) + ' vertices / ' + fmt(m.edges, 0) + ' edges / ' + fmt(m.triangles, 0) +
+        ' faces, ' + m.eulerFormula + ', ' + m.surfaceComponents + ' closed surface(s), genus ' + m.genusEstimate + ', watertight.');
+      lines.push('Bounds ' + m.boundingBoxMm.size.map(function (n) { return fmt(n, 2); }).join(' / ') + ' mm, volume ' +
+        fmt(m.volumeMm3, 2) + ' mm3, ' + fmt(m.degenerateTriangles + m.nonUnitNormals, 0) + ' degenerate or non-unit normals.');
+      if (report.occupancy) lines.push(fmt(report.occupancy.solidCells, 0) + ' of ' + fmt(report.occupancy.totalCells, 0) +
+        ' cells solid at ' + report.occupancy.pitchMm + ' mm pitch.');
+      lines.push('SHA-256 ' + report.file.sha256.slice(0, 16) + '... binds this verdict to the file.');
+      el.className = 'verification-result audit-result good';
+    } else {
+      report.failures.forEach(function (failure) { lines.push(failure); });
+      el.className = 'verification-result audit-result bad';
+    }
+    el.textContent = lines.join('\n');
+    $('audit-report').disabled = false;
+    announce('Audit ' + report.verdict.toLowerCase() + ': ' + report.file.name + '.');
+    return report;
+  }
+
+  function auditFileObject(file) {
+    if (!file) return;
+    if (file.size > 32000000) throw new RangeError('Audit files are limited to 32 MB.');
+    if (typeof file.arrayBuffer === 'function') {
+      return file.arrayBuffer().then(function (buffer) { auditBytes(new Uint8Array(buffer), file.name); });
+    }
+    return file.text().then(function (text) { auditBytes(text, file.name); });
+  }
+
+  function downloadAuditReport() {
+    if (!state.audit) throw new RangeError('Audit a file first.');
+    var base = String(state.audit.file.name).replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_.-]+/g, '_').replace(/^[_.]+|[_.]+$/g, '') || 'export';
+    downloadBlob(new Blob([JSON.stringify(state.audit, null, 2)], { type: 'application/json' }), base.slice(0, 80) + '.integrity.json');
+    showToast('Integrity proof report downloaded.');
   }
 
   function protectedAction(fn) {
@@ -996,14 +1051,17 @@
   function infoTitle(name) { return SCULPTURE_INFO[name] ? SCULPTURE_INFO[name].title : 'Sculpture'; }
 
   function stopTurntable() {
+    var wasPlaying = state.turntable;
     if (state.turntableTimer !== null) { clearInterval(state.turntableTimer); state.turntableTimer = null; }
     state.turntable = false;
     $('turntable-toggle').setAttribute('aria-pressed', 'false');
     $('turntable-toggle').textContent = 'Play turntable';
+    if (wasPlaying) announce('Turntable stopped.');
   }
 
   function toggleTurntable() {
     if (state.turntable) { stopTurntable(); return; }
+    announce('Turntable playing.');
     state.turntable = true;
     $('turntable-toggle').setAttribute('aria-pressed', 'true');
     $('turntable-toggle').textContent = 'Pause turntable';
@@ -1062,6 +1120,7 @@
       $('gallery-toggle').setAttribute('aria-pressed', 'false');
       $('gallery-toggle').textContent = 'Resume gallery';
       updateTourCaption();
+      announce('Gallery tour paused.');
       return;
     }
     if (state.gallery && state.galleryPaused) {
@@ -1071,6 +1130,7 @@
       if (!state.turntable) { toggleTurntable(); state.galleryOwnsTurntable = true; }
       startGalleryTimer();
       updateTourCaption();
+      announce('Gallery tour resumed.');
       return;
     }
     state.gallery = true;
@@ -1083,6 +1143,7 @@
     if (!sculptureKey()) loadSculpture(GALLERY_ORDER[0]);
     else updateTourCaption();
     startGalleryTimer();
+    announce('Gallery tour playing.');
   }
 
   function toggleLighting() {
@@ -1091,6 +1152,7 @@
     $('lighting-toggle').textContent = state.lighting ? 'Studio lighting' : 'Exhibition lighting';
     $('art-section').classList.toggle('exhibition', state.lighting);
     render();
+    announce(state.lighting ? 'Exhibition lighting on.' : 'Studio lighting on.');
   }
 
   /* PNG output is encoded locally so the plate needs no canvas.toBlob path.
@@ -1405,6 +1467,7 @@
     $('theme-toggle').textContent = theme === 'dark' ? 'Light theme' : 'Dark theme';
     try { localStorage.setItem('voxelsynth-theme', theme); } catch (error) { /* Theme still works without storage. */ }
     render();
+    announce(theme === 'dark' ? 'Dark theme.' : 'Light theme.');
   }
 
   function setView(yaw, pitch) {
@@ -1438,6 +1501,7 @@
     state.slice = Math.max(0, Math.min(sliceAxisSize() - 1, Math.round(value)));
     state.selected[sliceAxisIndex()] = state.slice; $('slice').value = String(state.slice);
     clearHover(); updateChips(); updateInspector(); render();
+    announce(AXIS_NAME[sliceAxisIndex()] + ' layer ' + (state.slice + 1) + ' of ' + sliceAxisSize() + '.');
   }
 
   function setSliceAxis(axis) {
@@ -1451,6 +1515,21 @@
       button.setAttribute('aria-pressed', String(active));
     });
     clearHover(); updateChips(); updateInspector(); render();
+    announce('Slice plane set to ' + axis.toUpperCase() + '.');
+  }
+
+  function cycleSliceAxis(step) {
+    var axes = ['x', 'y', 'z'];
+    setSliceAxis(axes[(axes.indexOf(state.sliceAxis) + step + axes.length) % axes.length]);
+  }
+
+  function announceView() {
+    announce('Yaw ' + fmt(state.yawDeg, 0) + ' deg, pitch ' + fmt(state.pitchDeg, 0) + ' deg.');
+  }
+
+  function artKey(action, label) {
+    if (!state.artMode) { announce(label + ' needs Sculpture mode, toggled in the header.'); return; }
+    action();
   }
 
   function toggleSelected() {
@@ -1509,15 +1588,16 @@
     on('theme-toggle', 'click', function () { setTheme(state.theme === 'dark' ? 'light' : 'dark'); });
     on('help-toggle', 'click', function () {
       var panel = $('help-panel'); panel.hidden = !panel.hidden; this.setAttribute('aria-expanded', String(!panel.hidden));
+      announce(panel.hidden ? 'Keyboard reference closed.' : 'Keyboard reference open.');
     });
     on('yaw', 'input', function () { setView(numberInput('yaw'), state.pitchDeg); });
     on('pitch', 'input', function () { setView(state.yawDeg, numberInput('pitch')); });
     on('slice', 'input', function () { setSlice(numberInput('slice')); });
-    on('view-top', 'click', function () { setView(0, 90); });
-    on('view-front', 'click', function () { setView(0, 0); });
-    on('view-iso', 'click', function () { state.zoom = 1; setView(35, 28); });
-    on('toggle-wire', 'click', function () { state.wireframe = !state.wireframe; this.setAttribute('aria-pressed', String(state.wireframe)); render(); });
-    on('toggle-slice', 'click', function () { state.showSlice = !state.showSlice; this.setAttribute('aria-pressed', String(state.showSlice)); render(); });
+    on('view-top', 'click', function () { setView(0, 90); announce('Top view.'); });
+    on('view-front', 'click', function () { setView(0, 0); announce('Front view.'); });
+    on('view-iso', 'click', function () { state.zoom = 1; setView(35, 28); announce('Isometric view.'); });
+    on('toggle-wire', 'click', function () { state.wireframe = !state.wireframe; this.setAttribute('aria-pressed', String(state.wireframe)); render(); announce(state.wireframe ? 'Wireframe on.' : 'Solid view.'); });
+    on('toggle-slice', 'click', function () { state.showSlice = !state.showSlice; this.setAttribute('aria-pressed', String(state.showSlice)); render(); announce(state.showSlice ? 'Layer plane shown.' : 'Layer plane hidden.'); });
     document.querySelectorAll('[data-slice-axis]').forEach(function (button) {
       button.addEventListener('click', function () { setSliceAxis(button.dataset.sliceAxis); });
     });
@@ -1530,6 +1610,7 @@
     on('cycle-slice-mode', 'click', function () {
       state.sliceOnly = !state.sliceOnly; this.setAttribute('aria-pressed', String(state.sliceOnly));
       this.textContent = state.sliceOnly ? 'Show full part' : 'Clip above layer'; updateChips(); render();
+      announce(state.sliceOnly ? 'Showing the slice only.' : 'Clipping above the current layer.');
     });
     ['x', 'y', 'z'].forEach(function (axis, i) {
       on('inspect-' + axis, 'change', function () {
@@ -1561,6 +1642,23 @@
         if (file.size > 1000000) throw new RangeError('Project file must be smaller than 1 MB.');
         importText(await file.text());
       } finally { this.value = ''; }
+    });
+    on('audit-open', 'click', function () { $('audit-file').click(); });
+    on('audit-file', 'change', function () {
+      var input = this;
+      var done = function () { input.value = ''; };
+      var result = auditFileObject(this.files && this.files[0]);
+      if (result && typeof result.then === 'function') return result.then(done, function (error) { done(); throw error; });
+      done();
+    });
+    on('audit-report', 'click', downloadAuditReport);
+    on('audit-drop', 'dragover', function (event) { event.preventDefault(); this.classList.add('over'); });
+    on('audit-drop', 'dragleave', function () { this.classList.remove('over'); });
+    on('audit-drop', 'drop', function (event) {
+      event.preventDefault();
+      this.classList.remove('over');
+      var files = event.dataTransfer && event.dataTransfer.files;
+      return auditFileObject(files && files[0]);
     });
 
     var drag = null;
@@ -1638,11 +1736,24 @@
         case 'h': $('apply-shell').click(); break;
         case 't': $('theme-toggle').click(); break;
         case 'r': $('reset-grid').click(); break;
+        case 'w': $('toggle-wire').click(); break;
+        case 'p': $('toggle-print').click(); break;
+        case 'v': $('verify-exports').click(); break;
+        case 'i': state.zoom = 1; setView(35, 28); announce('Isometric view.'); break;
+        case 'o': setView(0, 90); announce('Top view.'); break;
+        case 'f': setView(0, 0); announce('Front view.'); break;
+        case 'n': $('apply-grid').click(); break;
+        case '[': cycleSliceAxis(-1); break;
+        case ']': cycleSliceAxis(1); break;
+        case 'e': artKey(exportExhibitionPlate, 'Exhibition plate export'); break;
+        case 'g': artKey(toggleGallery, 'Gallery tour'); break;
+        case 'u': artKey(toggleTurntable, 'Turntable'); break;
+        case 'l': artKey(toggleLighting, 'Exhibition lighting'); break;
         case '?': $('help-toggle').click(); break;
-        case 'arrowleft': setView(state.yawDeg - 5, state.pitchDeg); break;
-        case 'arrowright': setView(state.yawDeg + 5, state.pitchDeg); break;
-        case 'arrowup': setView(state.yawDeg, state.pitchDeg + 5); break;
-        case 'arrowdown': setView(state.yawDeg, state.pitchDeg - 5); break;
+        case 'arrowleft': setView(state.yawDeg - 5, state.pitchDeg); announceView(); break;
+        case 'arrowright': setView(state.yawDeg + 5, state.pitchDeg); announceView(); break;
+        case 'arrowup': setView(state.yawDeg, state.pitchDeg + 5); announceView(); break;
+        case 'arrowdown': setView(state.yawDeg, state.pitchDeg - 5); announceView(); break;
         case 'pageup': setSlice(state.slice + 1); break;
         case 'pagedown': setSlice(state.slice - 1); break;
         default: handled = false;
@@ -1668,6 +1779,8 @@
     window.VoxelSynthStudio = {
       snapshot: function () { return V.serializeGrid(state.grid); },
       importText: importText,
+      auditBytes: auditBytes,
+      lastAudit: function () { return state.audit; },
       inspect: function () { return { selected: state.selected.slice(), slice: state.slice, sliceAxis: state.sliceAxis, yawDeg: state.yawDeg, pitchDeg: state.pitchDeg,
         width: state.viewportWidth, height: state.viewportHeight, dpr: state.dpr, zoom: state.zoom,
         inset: Object.assign({}, state.inset), faceCount: state.faces.length, sliceOnly: state.sliceOnly, showSlice: state.showSlice,

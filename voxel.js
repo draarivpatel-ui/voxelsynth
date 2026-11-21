@@ -1388,6 +1388,401 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Binary glTF 2.0 (.glb) writer and reader                            */
+  /* ------------------------------------------------------------------ */
+
+  /* A GLB is a 12 byte header, a JSON chunk padded with spaces and a BIN
+   * chunk padded with zeros, each chunk length aligned to four bytes. The
+   * BIN block stores float32 positions, float32 per-vertex normals and
+   * uint32 triangle indices; per-vertex normals accumulate the unit facet
+   * normals at every corner. */
+  function exportGLB(mesh, name) {
+    assertMesh(mesh);
+    if (!mesh.triangles.length) throw new RangeError('binary glTF export needs a nonempty manifold');
+    var label = solidName(name);
+    var i, j, k;
+    var vertexCount = mesh.vertices.length, triangleCount = mesh.triangles.length;
+    var positions = new Float32Array(vertexCount * 3);
+    var normals = new Float32Array(vertexCount * 3);
+    var indices = new Uint32Array(triangleCount * 3);
+    var firstNormal = new Array(vertexCount);
+    var min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (i = 0; i < vertexCount; i++) {
+      var v = mesh.vertices[i];
+      for (j = 0; j < 3; j++) {
+        var rounded = Math.fround(v[j]);
+        if (!Number.isFinite(rounded)) throw new RangeError('binary glTF float32 precision lost a vertex; use ASCII STL or OBJ');
+        positions[i * 3 + j] = rounded;
+        if (rounded < min[j]) min[j] = rounded;
+        if (rounded > max[j]) max[j] = rounded;
+      }
+    }
+    var facets = meshFacets(mesh);
+    for (i = 0; i < facets.length; i++) {
+      var f = facets[i];
+      var roundedFacet = f.vertices.map(function (point) { return point.map(Math.fround); });
+      if (dot3(f.normal, cross3(sub3(roundedFacet[1], roundedFacet[0]), sub3(roundedFacet[2], roundedFacet[0]))) <= 0) {
+        throw new RangeError('binary glTF float32 precision would collapse a facet; use ASCII STL or OBJ');
+      }
+      for (j = 0; j < 3; j++) {
+        var id = mesh.triangles[i][j];
+        if (!firstNormal[id]) firstNormal[id] = f.normal;
+        for (k = 0; k < 3; k++) normals[id * 3 + k] += f.normal[k];
+      }
+      for (j = 0; j < 3; j++) indices[i * 3 + j] = mesh.triangles[i][j];
+    }
+    for (i = 0; i < vertexCount; i++) {
+      var nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+      var len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      var unit = len > 0 ? [nx / len, ny / len, nz / len] : (firstNormal[i] || [0, 0, 1]);
+      for (j = 0; j < 3; j++) {
+        var rn = Math.fround(unit[j]);
+        if (!Number.isFinite(rn) || rn === 0 && unit[j] !== 0) throw new RangeError('binary glTF float32 precision lost a normal; use ASCII STL or OBJ');
+        normals[i * 3 + j] = rn;
+      }
+    }
+    var binBytes = new Uint8Array(positions.byteLength + normals.byteLength + indices.byteLength);
+    binBytes.set(new Uint8Array(positions.buffer), 0);
+    binBytes.set(new Uint8Array(normals.buffer), positions.byteLength);
+    binBytes.set(new Uint8Array(indices.buffer), positions.byteLength + normals.byteLength);
+    var gltf = {
+      asset: { version: '2.0', generator: 'VoxelSynth' },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [{ mesh: 0, name: label }],
+      meshes: [{ name: label, primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2, material: 0, mode: 4 }] }],
+      materials: [{ name: 'voxelsynth', doubleSided: true, pbrMetallicRoughness: { baseColorFactor: [0.55, 0.66, 0.74, 1], metallicFactor: 0, roughnessFactor: 0.82 } }],
+      accessors: [
+        { bufferView: 0, byteOffset: 0, componentType: 5126, count: vertexCount, type: 'VEC3', min: min, max: max },
+        { bufferView: 1, byteOffset: 0, componentType: 5126, count: vertexCount, type: 'VEC3' },
+        { bufferView: 2, byteOffset: 0, componentType: 5125, count: triangleCount * 3, type: 'SCALAR' }
+      ],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: positions.byteLength, target: 34962 },
+        { buffer: 0, byteOffset: positions.byteLength, byteLength: normals.byteLength, target: 34962 },
+        { buffer: 0, byteOffset: positions.byteLength + normals.byteLength, byteLength: indices.byteLength, target: 34963 }
+      ],
+      buffers: [{ byteLength: binBytes.length }]
+    };
+    var jsonText = JSON.stringify(gltf);
+    var jsonPad = (4 - jsonText.length % 4) % 4, binPad = (4 - binBytes.length % 4) % 4;
+    var total = 12 + 8 + jsonText.length + jsonPad + 8 + binBytes.length + binPad;
+    var out = new Uint8Array(total), view = new DataView(out.buffer);
+    view.setUint32(0, 0x46546c67, true);          /* 'glTF' */
+    view.setUint32(4, 2, true);
+    view.setUint32(8, total, true);
+    view.setUint32(12, jsonText.length + jsonPad, true);
+    view.setUint32(16, 0x4e4f534a, true);         /* 'JSON' */
+    for (i = 0; i < jsonText.length; i++) out[20 + i] = jsonText.charCodeAt(i) & 0x7f;
+    for (i = 0; i < jsonPad; i++) out[20 + jsonText.length + i] = 0x20;
+    var binStart = 20 + jsonText.length + jsonPad;
+    view.setUint32(binStart, binBytes.length + binPad, true);
+    view.setUint32(binStart + 4, 0x004e4942, true); /* 'BIN\0' */
+    out.set(binBytes, binStart + 8);
+    return out;
+  }
+
+  /* Validates the indexed-triangle glTF 2.0 subset written above, extended
+   * to multi-mesh files: every primitive must be mode 4 (triangles) with a
+   * POSITION and an index accessor. Node transforms are not applied; equal
+   * positions across primitives weld back into shared vertices. */
+  function parseGLB(input) {
+    var bytes = Object.prototype.toString.call(input) === '[object ArrayBuffer]' ? new Uint8Array(input) : input;
+    if (!bytes || Object.prototype.toString.call(bytes) !== '[object Uint8Array]' || bytes.byteLength < 20) {
+      throw new TypeError('binary glTF requires a 20 byte header');
+    }
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== 0x46546c67) throw new TypeError('glTF magic is missing');
+    if (view.getUint32(4, true) !== 2) throw new TypeError('unsupported glTF container version');
+    if (view.getUint32(8, true) !== bytes.byteLength) throw new TypeError('glTF length does not match file size');
+    var jsonLength = view.getUint32(12, true);
+    if (view.getUint32(16, true) !== 0x4e4f534a) throw new TypeError('glTF must open with a JSON chunk');
+    if (20 + jsonLength + 8 > bytes.length) throw new TypeError('glTF JSON chunk overruns the file');
+    var binStart = 20 + jsonLength;
+    var binLength = view.getUint32(binStart, true);
+    if (view.getUint32(binStart + 4, true) !== 0x004e4942) throw new TypeError('glTF requires a BIN chunk');
+    if (binStart + 8 + binLength > bytes.length) throw new TypeError('glTF BIN chunk overruns the file');
+    var jsonText = '';
+    for (var c = 0; c < jsonLength; c++) jsonText += String.fromCharCode(bytes[20 + c]);
+    var gltf;
+    try { gltf = JSON.parse(jsonText); } catch (error) { throw new TypeError('glTF JSON chunk is malformed'); }
+    if (!gltf || !gltf.asset || gltf.asset.version !== '2.0') throw new TypeError('glTF asset version must be 2.0');
+    if (!Array.isArray(gltf.meshes) || !gltf.meshes.length || !Array.isArray(gltf.accessors) ||
+        !Array.isArray(gltf.bufferViews) || !Array.isArray(gltf.buffers) || gltf.buffers.length !== 1 ||
+        gltf.buffers[0].byteLength !== binLength) throw new TypeError('unsupported glTF structure');
+    var accessorBytes = { 5126: 4, 5125: 4, 5123: 2 };
+    var accessorItems = { SCALAR: 1, VEC3: 3 };
+    function readAccessor(index, label, componentTypes, items) {
+      var accessor = gltf.accessors[index];
+      if (!accessor || componentTypes.indexOf(accessor.componentType) < 0 || accessorItems[accessor.type] !== items) {
+        throw new TypeError('glTF ' + label + ' accessor has an unsupported component type');
+      }
+      var bufferView = gltf.bufferViews[accessor.bufferView];
+      if (!bufferView || bufferView.buffer !== 0) throw new TypeError('glTF ' + label + ' references a missing buffer view');
+      var offset = (bufferView.byteOffset || 0) + (accessor.byteOffset || 0);
+      var elementBytes = accessorBytes[accessor.componentType] * accessorItems[accessor.type];
+      var stride = bufferView.byteStride || elementBytes;
+      var localEnd = (accessor.byteOffset || 0) + stride * (accessor.count - 1) + elementBytes;
+      if (stride < elementBytes || localEnd > bufferView.byteLength || offset + bufferView.byteLength > binLength) {
+        throw new TypeError('glTF ' + label + ' accessor overruns its buffer');
+      }
+      var base = binStart + 8 + offset, items = accessorItems[accessor.type];
+      var out = new Array(accessor.count * items);
+      for (var i = 0; i < accessor.count; i++) {
+        for (var d = 0; d < items; d++) {
+          var at = base + i * stride + d * accessorBytes[accessor.componentType];
+          out[i * items + d] = accessor.componentType === 5126 ? view.getFloat32(at, true) :
+            accessor.componentType === 5125 ? view.getUint32(at, true) : view.getUint16(at, true);
+        }
+      }
+      return { data: out, count: accessor.count, items: items };
+    }
+    var lookup = new Map();
+    var mesh = { vertices: [], triangles: [], normals: [], nonUnitNormalCount: 0 };
+    gltf.meshes.forEach(function (gltfMesh) {
+      if (!Array.isArray(gltfMesh.primitives) || !gltfMesh.primitives.length) throw new TypeError('glTF mesh has no primitives');
+      gltfMesh.primitives.forEach(function (primitive) {
+        if (primitive.mode !== undefined && primitive.mode !== 4) throw new TypeError('glTF only supports triangle primitives');
+        if (primitive.attributes === undefined || !Number.isInteger(primitive.attributes.POSITION) || !Number.isInteger(primitive.indices)) {
+          throw new TypeError('glTF primitives need POSITION and indices accessors');
+        }
+        var positions = readAccessor(primitive.attributes.POSITION, 'POSITION', [5126], 3);
+        if (positions.count === 0) throw new TypeError('glTF POSITION must hold VEC3 vertices');
+        var ids = readAccessor(primitive.indices, 'indices', [5123, 5125], 1);
+        if (ids.count % 3 !== 0 || ids.count === 0) throw new TypeError('glTF indices must count whole triangles');
+        if (Number.isInteger(primitive.attributes.NORMAL)) {
+          var declared = readAccessor(primitive.attributes.NORMAL, 'NORMAL', [5126], 3);
+          if (declared.count !== positions.count) throw new TypeError('glTF NORMAL must match POSITION');
+          for (var n = 0; n < declared.data.length; n += 3) {
+            var nl = Math.sqrt(declared.data[n] * declared.data[n] + declared.data[n + 1] * declared.data[n + 1] + declared.data[n + 2] * declared.data[n + 2]);
+            if (!Number.isFinite(nl) || Math.abs(nl - 1) > 1e-3) mesh.nonUnitNormalCount++;
+          }
+        }
+        var remap = new Map();
+        for (var t = 0; t < ids.count; t++) {
+          var source = ids.data[t];
+          if (!Number.isInteger(source) || source < 0 || source >= positions.count) throw new TypeError('glTF index out of range');
+          var target = remap.get(source);
+          if (target === undefined) {
+            var point = [positions.data[source * 3], positions.data[source * 3 + 1], positions.data[source * 3 + 2]];
+            var key = pointKey(point);
+            if (lookup.has(key)) target = lookup.get(key);
+            else { target = mesh.vertices.length; lookup.set(key, target); mesh.vertices.push(point); }
+            remap.set(source, target);
+          }
+          if (t % 3 === 2) {
+            var tri = [remap.get(ids.data[t - 2]), remap.get(ids.data[t - 1]), target];
+            var a = mesh.vertices[tri[0]], b = mesh.vertices[tri[1]], c2 = mesh.vertices[tri[2]];
+            var cross = cross3(sub3(b, a), sub3(c2, a));
+            var len = length3(cross);
+            if (!Number.isFinite(len) || len === 0) throw new TypeError('glTF contains a degenerate face');
+            mesh.triangles.push(tri);
+            mesh.normals.push(cross.map(function (n) { return n / len; }));
+          }
+        }
+      });
+    });
+    assertMesh(mesh);
+    return mesh;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* SHA-256 and the export integrity auditor                            */
+  /* ------------------------------------------------------------------ */
+
+  var SHA256_K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ];
+
+  function rotr32(x, n) { return ((x >>> n) | (x << (32 - n))) | 0; }
+
+  /* Pure JavaScript SHA-256 so a proof report can bind its verdict to the
+   * exact audited bytes without any runtime dependency. */
+  function sha256Hex(bytes) {
+    if (!bytes || Object.prototype.toString.call(bytes) !== '[object Uint8Array]') throw new TypeError('SHA-256 requires a Uint8Array');
+    var h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    var bitLength = bytes.length * 8;
+    var totalLength = bytes.length + 1 + ((56 - (bytes.length + 1) % 64 + 64) % 64) + 8;
+    var msg = new Uint8Array(totalLength);
+    msg.set(bytes);
+    msg[bytes.length] = 0x80;
+    var msgView = new DataView(msg.buffer);
+    msgView.setUint32(totalLength - 8, Math.floor(bitLength / 0x100000000), false);
+    msgView.setUint32(totalLength - 4, bitLength % 0x100000000, false);
+    var w = new Array(64);
+    for (var off = 0; off < totalLength; off += 64) {
+      var i;
+      for (i = 0; i < 16; i++) w[i] = msgView.getUint32(off + i * 4, false);
+      for (i = 16; i < 64; i++) {
+        var s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+        var s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      var a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+      for (i = 0; i < 64; i++) {
+        var S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+        var ch = (e & f) ^ (~e & g);
+        var t1 = (hh + S1 + ch + SHA256_K[i] + w[i]) | 0;
+        var S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+        var maj = (a & b) ^ (a & c) ^ (b & c);
+        var t2 = (S0 + maj) | 0;
+        hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      h[0] = (h[0] + a) | 0; h[1] = (h[1] + b) | 0; h[2] = (h[2] + c) | 0; h[3] = (h[3] + d) | 0;
+      h[4] = (h[4] + e) | 0; h[5] = (h[5] + f) | 0; h[6] = (h[6] + g) | 0; h[7] = (h[7] + hh) | 0;
+    }
+    return h.map(function (value) { return ('0000000' + (value >>> 0).toString(16)).slice(-8); }).join('');
+  }
+
+  function auditInputBytes(input) {
+    if (Object.prototype.toString.call(input) === '[object ArrayBuffer]') return new Uint8Array(input);
+    if (Object.prototype.toString.call(input) === '[object Uint8Array]') return input;
+    if (typeof input === 'string') {
+      var bytes = new Uint8Array(input.length);
+      for (var i = 0; i < input.length; i++) bytes[i] = input.charCodeAt(i) & 0xff;
+      return bytes;
+    }
+    throw new TypeError('audit input must be bytes or text');
+  }
+
+  /* Format detection prefers byte magics; text signatures only run after the
+   * binary candidates are exhausted. A binary STL that happens to start with
+   * 'solid' is still caught by the exact 84 + 50 * count length contract. */
+  function detectExportFormat(bytes) {
+    if (bytes.length >= 4 && bytes[0] === 0x67 && bytes[1] === 0x6c && bytes[2] === 0x54 && bytes[3] === 0x46) return { id: 'glb', name: 'Binary glTF' };
+    if (bytes.length >= 4 && bytes[0] === 0x56 && bytes[1] === 0x4f && bytes[2] === 0x58 && bytes[3] === 0x20) return { id: 'vox', name: 'MagicaVoxel VOX' };
+    if (bytes.length >= 4 && bytes[0] === 0x70 && bytes[1] === 0x6c && bytes[2] === 0x79 && (bytes[3] === 0x0a || bytes[3] === 0x0d)) return { id: 'ply', name: 'Binary PLY' };
+    if (bytes.length >= 84) {
+      var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (bytes.length === 84 + view.getUint32(80, true) * 50) return { id: 'binary-stl', name: 'Binary STL' };
+    }
+    var text = '';
+    for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+    var trimmed = text.trim();
+    if (trimmed[0] === '{') {
+      var parsed = null;
+      try { parsed = JSON.parse(trimmed); } catch (error) { /* JSON.parse retried below for the error message. */ }
+      if (parsed && parsed.asset && String(parsed.asset.version) === '2.0') return { id: 'gltf-json', name: 'JSON glTF' };
+      return { id: 'json', name: 'Project JSON' };
+    }
+    if (/^solid\s/.test(trimmed)) return { id: 'ascii-stl', name: 'ASCII STL' };
+    if (/voxelsynth_body|\/\/ Grid:/.test(text)) return { id: 'scad', name: 'OpenSCAD' };
+    if (/^(?:v|vn|vt|f|o|g|#)\s/m.test(text) || /^(?:v|vn|f|o)\s/.test(trimmed)) return { id: 'obj', name: 'OBJ' };
+    if (/^ply\s/.test(trimmed)) return { id: 'ply', name: 'PLY' };
+    return { id: 'unrecognized', name: 'Unrecognized' };
+  }
+
+  /* Counted audit of one parsed mesh: Euler characteristic, genus from
+   * chi = 2 * (components - g), degenerate facets and non-unit declared
+   * normals, area, divergence volume and the bounding box proof. */
+  function auditMeshIntegrity(mesh) {
+    var a = analyzeMesh(mesh);
+    var degenerate = 0;
+    mesh.triangles.forEach(function (ids) {
+      var cross = cross3(sub3(mesh.vertices[ids[1]], mesh.vertices[ids[0]]), sub3(mesh.vertices[ids[2]], mesh.vertices[ids[0]]));
+      var len = length3(cross);
+      if (!Number.isFinite(len) || len <= 0) degenerate++;
+    });
+    return {
+      vertices: a.uniqueVertices,
+      edges: a.uniqueEdges,
+      triangles: a.triangleCount,
+      eulerCharacteristic: a.eulerCharacteristic,
+      eulerFormula: 'V - E + F = ' + a.eulerCharacteristic,
+      surfaceComponents: a.surfaceComponents,
+      genusEstimate: a.genusEstimate,
+      genusFormula: a.genusEstimate === null ? null : '(2 * ' + a.surfaceComponents + ' - ' + a.eulerCharacteristic + ') / 2 = ' + a.genusEstimate,
+      watertight: a.watertight,
+      boundaryEdges: a.boundaryEdges,
+      nonManifoldEdges: a.nonManifoldEdges,
+      nonManifoldVertices: a.nonManifoldVertices,
+      windingErrors: a.windingErrors,
+      degenerateTriangles: degenerate,
+      nonUnitNormals: mesh.nonUnitNormalCount || 0,
+      surfaceAreaMm2: a.surfaceAreaMm2,
+      volumeMm3: a.volumeMm3,
+      volumeCm3: a.volumeCm3,
+      boundingBoxMm: a.boundingBoxMm
+    };
+  }
+
+  /* Audits an exported file without trusting it: detects the format, parses
+   * it with the same strict readers used for round trips, recounts topology
+   * and binds the verdict to the file SHA-256. Malformed content yields a
+   * REJECTED report instead of throwing, so callers never inherit state. */
+  function auditExportFile(input, name) {
+    var bytes = auditInputBytes(input);
+    var detected = detectExportFormat(bytes);
+    var report = {
+      report: 'voxelsynth-export-integrity',
+      reportVersion: 1,
+      generator: 'VoxelSynth ' + api.version,
+      file: {
+        name: typeof name === 'string' && name ? name : 'export',
+        bytes: bytes.length,
+        sha256: sha256Hex(bytes),
+        format: detected.id,
+        formatName: detected.name
+      },
+      verdict: 'REJECTED',
+      failures: [],
+      mesh: null,
+      occupancy: null
+    };
+    if (detected.id === 'unrecognized') {
+      report.failures.push('Unrecognized export format. Expected binary STL, ASCII STL, OBJ, binary PLY, binary glTF, VOX, OpenSCAD or project JSON.');
+      return report;
+    }
+    if (detected.id === 'gltf-json') {
+      report.failures.push('JSON glTF references external buffers; audit a single-file binary .glb instead.');
+      return report;
+    }
+    try {
+      if (detected.id === 'json' || detected.id === 'scad' || detected.id === 'vox') {
+        var text = '';
+        if (detected.id !== 'vox') for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+        var grid = detected.id === 'json' ? deserializeGrid(JSON.parse(text)) :
+          detected.id === 'scad' ? parseOpenSCAD(text) : parseVOX(bytes);
+        report.occupancy = {
+          nx: grid.nx, ny: grid.ny, nz: grid.nz, pitchMm: grid.pitchMm,
+          solidCells: countVoxels(grid), totalCells: grid.data.length
+        };
+        report.mesh = auditMeshIntegrity(extractManifoldMesh(grid));
+      } else {
+        var mesh;
+        if (detected.id === 'binary-stl') mesh = parseBinarySTL(bytes);
+        else if (detected.id === 'glb') mesh = parseGLB(bytes);
+        else if (detected.id === 'ply') mesh = parsePLY(bytes);
+        else {
+          var text = '';
+          for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+          mesh = detected.id === 'obj' ? parseOBJ(text) : parseAsciiSTL(text);
+        }
+        report.mesh = auditMeshIntegrity(mesh);
+      }
+    } catch (error) {
+      report.failures.push('Rejected while reading ' + detected.name + ': ' + error.message);
+      return report;
+    }
+    var m = report.mesh;
+    if (m.boundaryEdges) report.failures.push(m.boundaryEdges + ' boundary edge(s) break the closed surface');
+    if (m.nonManifoldEdges) report.failures.push(m.nonManifoldEdges + ' edge(s) carry more than two facets');
+    if (m.nonManifoldVertices) report.failures.push(m.nonManifoldVertices + ' vertex link(s) fail to close into one ring');
+    if (m.windingErrors) report.failures.push(m.windingErrors + ' paired edge(s) run the same direction');
+    if (m.degenerateTriangles) report.failures.push(m.degenerateTriangles + ' degenerate triangle(s) have zero area');
+    if (m.nonUnitNormals) report.failures.push(m.nonUnitNormals + ' declared normal(s) are not unit length');
+    report.verdict = report.failures.length ? 'FAIL' : 'PASS';
+    return report;
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Signed distance field helpers                                       */
   /* ------------------------------------------------------------------ */
 
@@ -1824,6 +2219,10 @@
     exportPLY: exportPLY,
     exportOpenSCAD: exportOpenSCAD,
     exportVOX: exportVOX,
+    exportGLB: exportGLB,
+    parseGLB: parseGLB,
+    sha256Hex: sha256Hex,
+    auditExportFile: auditExportFile,
     parseAsciiSTL: parseAsciiSTL,
     parseBinarySTL: parseBinarySTL,
     parseOBJ: parseOBJ,
