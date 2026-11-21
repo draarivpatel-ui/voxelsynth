@@ -664,7 +664,7 @@
     if (opts.infillPercent !== undefined) assertFinite(opts.infillPercent, 'infill');
     var pitch = grid.pitchMm;
     var quads = buildQuads(grid);
-    var i, d;
+    var i;
 
     var mesh = {
       vertices: [],

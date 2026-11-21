@@ -277,7 +277,7 @@
   function drawBuildPlateCage(fit, v) {
     var g = state.grid;
     var p = g.pitchMm;
-    var wMm = g.nx * p, dMm = g.ny * p, hMm = g.nz * p;
+    var wMm = g.nx * p, dMm = g.ny * p;
     var lineCol = cssVar('--line-strong') || '#8d897f';
 
     /* Floor grid on z = 0 build plate. */
@@ -1296,7 +1296,7 @@
       });
     }
 
-    var fit = buildFaces();
+    buildFaces();
     var points = [];
     state.faces.forEach(function (face) { face.pts.forEach(function (p) { points.push([p[0], p[1], p[2]]); }); });
     if (points.length) {
