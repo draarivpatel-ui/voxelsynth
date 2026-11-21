@@ -28,9 +28,9 @@ The showcase buttons load complete designs directly. The part recipe selector ca
 | Audit | Printability overlay: floating-cluster detection over 6-neighbor connectivity, per-axis thin cell counts, overhang cell and area totals, printable verdict |
 | Recover | 32 geometry revisions with undo/redo; project JSON save/open; failed edits and imports preserve the current geometry |
 | Verify | Counted edge incidences, directed winding, connected vertex link cycles, surface components, Euler characteristic, total genus, live V - E + F proof, area and volume |
-| Export | ASCII STL, binary STL, indexed OBJ, binary little endian PLY, cuboid-merged OpenSCAD and MagicaVoxel VOX; every download is reparsed before delivery |
+| Export | ASCII STL, binary STL, indexed OBJ, binary little endian PLY, binary glTF, cuboid-merged OpenSCAD and MagicaVoxel VOX; every download is reparsed before delivery |
 | Sculpt | Four algorithmic sculpture presets (gyroid pavilion, Menger lantern, helical ribbon, Voronoi amphitheater) on the editable lattice; timed curated gallery cycle with captions and pause/resume/exit, exhibition lighting, turntable orbit and a locally encoded 1400 x 1000 exhibition plate PNG |
-| Access | Focusable canvas, direct X/Y/Z cell editor, keyboard edits, visible focus, live status, large touch targets and reduced motion preferences |
+| Access | Focusable canvas, direct X/Y/Z cell editor, keyboard edits with a persistent single-key shortcuts switch, visible focus, live status, large touch targets and reduced motion preferences |
 | Display | Responsive layouts with the viewport first on narrow screens; light and dark themes; CSS-pixel drawing with a DPI-scaled backing store |
 
 Empty lattices and point or edge contacts keep project save available and disable manufacturing exports. The diagnostics identify why the surface needs an edit.
@@ -71,17 +71,18 @@ Open [index.html](index.html) directly in a modern browser, or host these files 
 Node.js is needed only for tests and programmatic use. The browser needs no installation.
 
 ```sh
-node --test test.js export-test.js ui-test.js
+npm test
 ```
 
-Current verified result: **241 tests, 241 passed, 0 failed, 0 skipped**. Tests use Node builtins only.
+Current verified result: **337 tests, 337 passed, 0 failed, 0 skipped**. Tests use Node builtins only, and CI runs the same single command.
 
 | Suite | Command | Verified result |
 | --- | --- | --- |
 | Engine | `node --test test.js` | 134 passed, 0 failed |
 | File schemas and precision | `node --test export-test.js` | 47 passed, 0 failed |
-| DOM and interaction | `node --test ui-test.js` | 60 passed, 0 failed |
-| Full suite | `node --test test.js export-test.js ui-test.js` | 241 passed, 0 failed |
+| Export integrity and audit | `node --test integrity-test.js` | 92 passed, 0 failed |
+| DOM and interaction | `node --test ui-test.js` | 64 passed, 0 failed |
+| Full suite | `npm test` | 337 passed, 0 failed |
 
 The engine suite checks all 256 occupancy masks of a 2 x 2 x 2 block, exact center-sampling boundaries, singular contacts, cavities, translations, malformed input, live mirrored edits, printability component and wraparound analysis, and a 2,000,000-cell project snapshot. Format tests check complete STL facets, binary length and little endian records, OBJ index bounds, binary PLY element records and float32 collapse guards, VOX chunk structure and occupancy fidelity, balanced OpenSCAD structure, disjoint cuboid coverage and pitches from 0.000001 to 1,000,000 mm, plus full schema round trips for every sculpture preset.
 
@@ -111,9 +112,9 @@ For closed surface components, `chi = V - E + F` and total genus is `(2 * compon
 
 ### Export contracts
 
-ASCII STL and OBJ retain the JavaScript double's round-trip numeric representation. Binary STL and binary little endian PLY write float32 records and refuse a facet if conversion would collapse it. OBJ uses positive `v//vn` indices and one unit face normal per triangle. PLY declares float x/y/z vertices and uchar-listed int32 faces. OpenSCAD merges disjoint rectangles across consecutive Z slices into cuboids and writes a balanced module and union. MagicaVoxel VOX writes SIZE, XYZI and RGBA chunks at up to 256 cells per axis and verifies without a manifold mesh, since it carries raw occupancy rather than surface facets.
+ASCII STL and OBJ retain the JavaScript double's round-trip numeric representation. Binary STL and binary little endian PLY write float32 records and refuse a facet if conversion would collapse it. OBJ uses positive `v//vn` indices and one unit face normal per triangle. PLY declares float x/y/z vertices and uchar-listed int32 faces. Binary glTF writes meter units per the glTF 2.0 specification (millimeter geometry divided by 1000), and the reader converts back to millimeters. OpenSCAD merges disjoint rectangles across consecutive Z slices into cuboids and writes a balanced module and union. MagicaVoxel VOX writes SIZE, XYZI and RGBA chunks at up to 256 cells per axis and verifies without a manifold mesh, since it carries raw occupancy rather than surface facets.
 
-Independent readers validate the subset the studio writes. `verifyExports(grid)` checks every mesh vertex, facet count, topology, area and volume, then reconstructs all OpenSCAD cells, VOX occupancy and project occupancy. Its maximum accepted relative mesh volume difference is `1e-5`; the fractional-pitch and extreme-pitch tests use that bound.
+Independent readers validate the subset the studio writes. `verifyExports(grid)` checks every mesh vertex, facet count, topology, area and volume, then reconstructs all OpenSCAD cells, VOX occupancy and project occupancy. Its maximum accepted relative mesh volume difference is `1e-5`; the fractional-pitch and extreme-pitch tests use that bound. The export auditor walks a glTF scene graph the same way a viewer does: every node in the active scene contributes its mesh primitives through the composed world transform, whether the transform is a matrix or a translation, rotation and scale triple, so instanced, scaled, translated or mirrored content is counted in world coordinates.
 
 ## Programmatic use
 
@@ -149,8 +150,9 @@ Voxel resolution controls dimensional accuracy. Curves are stepped surfaces, six
 | [voxel.js](voxel.js) | Validated lattice, CSG, SDFs, algorithmic sculpture presets, surface extraction, topology, printability analysis, live symmetry edits, format writers/readers and project serialization |
 | [app.js](app.js) | Renderer, DPI resizing, X/Y/Z slice inspection, printability overlay, recoverable edits, keyboard navigation, sculpture gallery and checked export delivery |
 | [index.html](index.html), [style.css](style.css) | Local studio, responsive hierarchy, accessible controls, themes and the sculpture section |
-| [test.js](test.js) | 129 engine tests |
+| [test.js](test.js) | 134 engine tests |
 | [export-test.js](export-test.js) | 47 format and precision tests |
-| [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 54 UI tests and the strict page contract |
+| [integrity-test.js](integrity-test.js) | 92 export integrity, audit and glTF scene tests |
+| [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 64 UI tests and the strict page contract |
 
 MIT. See [LICENSE](LICENSE).

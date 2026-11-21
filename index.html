@@ -19,6 +19,7 @@
     <span class="offline-badge">100% local geometry</span>
     <button id="art-mode-toggle" class="btn btn-ghost" type="button" aria-pressed="false" aria-controls="art-section">Sculpture mode</button>
     <button id="theme-toggle" class="btn btn-ghost" type="button" aria-label="Toggle light or dark theme" title="Theme (T)">Dark theme</button>
+    <button id="shortcuts-toggle" class="btn btn-ghost" type="button" aria-pressed="true" aria-label="Single-key shortcuts" title="Single-key shortcuts">Shortcuts on</button>
     <button id="help-toggle" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="help-panel">Shortcuts (?)</button>
   </div>
 </header>
@@ -69,8 +70,9 @@
     <dt>I / O / F</dt><dd>Isometric / top / front view</dd>
     <dt>[ and ]</dt><dd>Cycle the slice plane axis</dd>
     <dt>G / U / L / E</dt><dd>In Sculpture mode: gallery / turntable / lighting / export plate</dd>
+    <dt>Shortcuts toggle</dt><dd>Header switch turns every single-key command on or off; the choice is remembered on this device</dd>
   </dl>
-  <p>Shortcuts respect form fields and browser modifier keys. Every canvas edit is also available through the X/Y/Z inspector, and silent actions announce through a live status line for screen readers.</p>
+  <p>Single-key commands run only while the header's Single-key shortcuts toggle is on, and never while a button, link or form field has focus. Arrow keys, PageUp, PageDown, Space and Enter are always live. Every canvas edit is also available through the X/Y/Z inspector, and silent actions announce through a live status line for screen readers.</p>
 </section>
 <main id="workspace" class="workspace" tabindex="-1">
   <section class="panel panel-controls" aria-labelledby="controls-heading">

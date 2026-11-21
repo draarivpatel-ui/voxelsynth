@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const { createWorkspace } = require('./dom-harness.js');
 const V = require('./voxel.js');
 
@@ -106,8 +107,8 @@ test('binary glTF accessors count vertices and indices with a required POSITION 
   assert.equal(pos.type, 'VEC3'); assert.equal(nrm.type, 'VEC3'); assert.equal(idx.type, 'SCALAR');
   assert.equal(pos.componentType, 5126); assert.equal(idx.componentType, 5125);
   const s = mesh.stats.boundingBoxMm;
-  assert.deepEqual(pos.min, s.min.map(Math.fround));
-  assert.deepEqual(pos.max, s.max.map(Math.fround));
+  assert.deepEqual(pos.min, s.min.map(v => Math.fround(v / 1000)));
+  assert.deepEqual(pos.max, s.max.map(v => Math.fround(v / 1000)));
   assert.equal(gltf.buffers[0].byteLength, bin.length);
   assert.equal(bin.length, mesh.vertices.length * 24 + mesh.triangles.length * 12);
 });
@@ -159,12 +160,12 @@ for (const [label, grid] of [['unit cube', box(4, 5, 6)], ['board fixture', V.lo
   });
 }
 
-test('parsed glTF vertices equal the float32 export positions', () => {
+test('parsed glTF vertices equal the float32 export positions read back in millimeters', () => {
   const mesh = V.extractManifoldMesh(box(4, 5, 6));
   const restored = V.parseGLB(V.exportGLB(mesh, 'cube'));
   mesh.vertices.forEach(function (point, i) {
     point.forEach(function (value, d) {
-      assert.equal(restored.vertices[i][d], Math.fround(value));
+      assert.equal(restored.vertices[i][d], Math.fround(value / 1000) * 1000);
     });
   });
 });
@@ -251,6 +252,79 @@ test('parseGLB counts declared normals that are not unit length', () => {
   assert.match(report.failures.join(' '), /not unit length/);
 });
 
+/* ------------------------ glTF units and scenes ---------------------- */
+
+test('binary glTF writes POSITION in meters per the glTF 2.0 spec and reads it back in millimeters', () => {
+  const mesh = V.extractManifoldMesh(box(10, 10, 10));
+  const glb = V.exportGLB(mesh, 'cube10');
+  const { gltf, bin } = glbParts(glb);
+  const pos = gltf.accessors[0];
+  assert.deepEqual(pos.min, [0, 0, 0]);
+  assert.ok(pos.max.every(v => Math.abs(v - 0.01) < 1e-6), 'a 10 mm cube writes max 0.01 m, got ' + JSON.stringify(pos.max));
+  const view = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+  for (let i = 0; i < pos.count * 3; i++) {
+    const value = view.getFloat32(gltf.bufferViews[0].byteOffset + i * 4, true);
+    assert.ok(value >= 0 && value <= 0.011, 'POSITION component ' + i + ' reads ' + value + ' m instead of millimeters');
+  }
+  const report = V.auditExportFile(glb, 'cube10.glb');
+  assert.equal(report.verdict, 'PASS');
+  assert.ok(Math.abs(report.mesh.volumeMm3 - 1000) < 0.01, 'a 10 mm cube must audit near 1000 mm3, got ' + report.mesh.volumeMm3);
+  report.mesh.boundingBoxMm.size.forEach((n, i) => assert.ok(Math.abs(n - 10) < 0.001, 'bounding axis ' + i));
+});
+
+test('the glTF audit instances every scene node through composed world transforms', () => {
+  const mesh = V.extractManifoldMesh(box(1, 1, 1));
+  assert.equal(mesh.triangles.length, 12);
+  const { gltf, bin } = glbParts(V.exportGLB(mesh, 'cube'));
+  gltf.nodes[0].scale = [2, 2, 2];
+  gltf.nodes[0].translation = [20, 0, 0];
+  gltf.nodes[0].children = [1];
+  gltf.nodes.push({ mesh: 0, translation: [0, 0, 20] });
+  const report = V.auditExportFile(buildContainer(gltf, bin), 'instanced.glb');
+  assert.equal(report.verdict, 'PASS', report.failures.join(' | '));
+  assert.equal(report.mesh.triangles, 24);
+  assert.equal(report.mesh.surfaceComponents, 2);
+  assert.equal(report.mesh.watertight, true);
+  assert.ok(Math.abs(report.mesh.volumeMm3 - 16) < 0.01, 'two scaled 2 mm cubes enclose 16 mm3, got ' + report.mesh.volumeMm3);
+  const close = (a, b) => Math.abs(a - b) < 0.01;
+  assert.ok(report.mesh.boundingBoxMm.min.every((n, i) => close(n, [20000, 0, 0][i])), JSON.stringify(report.mesh.boundingBoxMm.min));
+  assert.ok(report.mesh.boundingBoxMm.max.every((n, i) => close(n, [20002, 2, 40002][i])), 'child translation composes inside the parent scale: ' + JSON.stringify(report.mesh.boundingBoxMm.max));
+});
+
+test('glTF node matrices, quaternions and mirrored scales compose truthfully', () => {
+  const mesh = V.extractManifoldMesh(box(10, 10, 10));
+  const { gltf, bin } = glbParts(V.exportGLB(mesh, 'cube10'));
+  const rotated = JSON.parse(JSON.stringify(gltf));
+  rotated.nodes[0].rotation = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+  const quarter = V.parseGLB(buildContainer(rotated, bin));
+  const bounds = V.analyzeMesh(quarter).boundingBoxMm;
+  assert.ok(Math.abs(bounds.min[0] + 10) < 0.01 && Math.abs(bounds.max[0]) < 0.01 &&
+    Math.abs(bounds.min[1]) < 0.01 && Math.abs(bounds.max[1] - 10) < 0.01, '90 deg Z rotation maps the cube into -X/+Y');
+  const matrixed = JSON.parse(JSON.stringify(gltf));
+  matrixed.nodes[0].matrix = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0.02, 0, 0, 1];
+  const scaled = V.analyzeMesh(V.parseGLB(buildContainer(matrixed, bin)));
+  assert.ok(Math.abs(scaled.volumeMm3 - 8000) < 0.5);
+  assert.deepEqual(scaled.boundingBoxMm.size.map(n => Math.round(n)), [20, 20, 20]);
+  const mirrored = JSON.parse(JSON.stringify(gltf));
+  mirrored.nodes[0].scale = [-1, 1, 1];
+  const flipped = V.analyzeMesh(V.parseGLB(buildContainer(mirrored, bin)));
+  assert.ok(flipped.watertight);
+  assert.ok(flipped.volumeMm3 > 0, 'a mirror transform must flip winding back to outward, got ' + flipped.volumeMm3);
+});
+
+test('the glTF audit ignores meshes the active scene never references and rejects cycles', () => {
+  const mesh = V.extractManifoldMesh(box(1, 1, 1));
+  const { gltf, bin } = glbParts(V.exportGLB(mesh, 'cube'));
+  const extra = JSON.parse(JSON.stringify(gltf));
+  extra.meshes.push(JSON.parse(JSON.stringify(extra.meshes[0])));
+  const report = V.auditExportFile(buildContainer(extra, bin), 'orphan.glb');
+  assert.equal(report.mesh.triangles, 12);
+  assert.equal(report.verdict, 'PASS');
+  const cyclic = JSON.parse(JSON.stringify(gltf));
+  cyclic.nodes[0].children = [0];
+  assert.throws(() => V.parseGLB(buildContainer(cyclic, bin)), /cycle/);
+});
+
 /* --------------------------- Audit verdicts -------------------------- */
 
 const AUDIT_CASES = [
@@ -278,7 +352,8 @@ for (const [format, name, build] of AUDIT_CASES) {
     assert.equal(report.mesh.eulerCharacteristic, 2);
     assert.equal(report.mesh.degenerateTriangles, 0);
     assert.equal(report.mesh.nonUnitNormals, 0);
-    assert.deepEqual(report.mesh.boundingBoxMm.size, format === 'vox' ? [6, 5, 4] : [9, 7.5, 6]);
+    const expectedSize = format === 'vox' ? [6, 5, 4] : [9, 7.5, 6];
+    report.mesh.boundingBoxMm.size.forEach((n, i) => assert.ok(Math.abs(n - expectedSize[i]) < 1e-5, 'bounding box axis ' + i));
     if (format === 'vox' || format === 'scad' || format === 'json') assert.equal(report.occupancy.solidCells, 120);
   });
 }
@@ -433,6 +508,69 @@ test('a degenerate or misindexed OBJ fails instead of silently passing', () => {
   assert.equal(V.auditExportFile(dup, 'bad.obj').verdict, 'REJECTED');
   const outOfRange = 'o bad\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 9//1\n';
   assert.equal(V.auditExportFile(outOfRange, 'bad.obj').verdict, 'REJECTED');
+});
+
+/* --------------------- Honest geometry verdicts ---------------------- */
+
+test('a coincident double-sided sheet fails as doubled faces, not a watertight pass', () => {
+  const sheet = 'o double\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nvn 0 0 -1\nf 1//1 2//1 3//1\nf 3//2 2//2 1//2\n';
+  const report = V.auditExportFile(sheet, 'double.obj');
+  assert.equal(report.verdict, 'FAIL');
+  assert.equal(report.mesh.watertight, false);
+  assert.equal(report.mesh.duplicateTriangles, 1);
+  assert.equal(report.mesh.volumeMm3, 0);
+  assert.match(report.failures.join(' '), /coincident|same three vertices/);
+});
+
+test('an inward-facing closed shell fails on nonpositive signed volume', () => {
+  const obj = V.exportOBJ(V.extractManifoldMesh(box(10, 10, 10)), 'inward');
+  const inward = obj.split('\n').map(line => {
+    if (line.startsWith('vn ')) return 'vn ' + line.slice(3).trim().split(/\s+/).map(n => String(-Number(n))).join(' ');
+    if (line.startsWith('f ')) { const p = line.slice(2).trim().split(/\s+/); return 'f ' + [p[2], p[1], p[0]].join(' '); }
+    return line;
+  }).join('\n');
+  const report = V.auditExportFile(inward, 'inward.obj');
+  assert.equal(report.verdict, 'FAIL');
+  assert.ok(report.mesh.volumeMm3 < -990, 'inverted 10 mm cube signs near -1000 mm3, got ' + report.mesh.volumeMm3);
+  assert.match(report.failures.join(' '), /signed volume|not positive/);
+});
+
+test('a legitimate nested cavity shell keeps a positive net volume and still passes', () => {
+  const g = V.shellGrid(box(12, 12, 12, 1), 2);
+  const report = V.auditExportFile(V.exportBinarySTL(V.extractManifoldMesh(g), 'shell'), 'shell.stl');
+  assert.equal(report.verdict, 'PASS', report.failures.join(' | '));
+  assert.equal(report.mesh.surfaceComponents, 2);
+  assert.ok(report.mesh.volumeMm3 > 0);
+  const cavity = box(12, 12, 12, 1);
+  V.subtractSphere(cavity, 6, 6, 6, 3);
+  const cavityReport = V.auditExportFile(V.exportAsciiSTL(V.extractManifoldMesh(cavity), 'cavity'), 'cavity.stl');
+  assert.equal(cavityReport.verdict, 'PASS');
+  assert.equal(cavityReport.mesh.surfaceComponents, 2);
+});
+
+test('empty project JSON, empty OBJ and empty VOX report EMPTY rather than a geometry pass', () => {
+  const emptyGrid = V.createGrid(4, 4, 4, 1);
+  const json = V.auditExportFile(JSON.stringify(V.serializeGrid(emptyGrid)), 'empty.json');
+  assert.equal(json.verdict, 'EMPTY');
+  assert.equal(json.mesh.watertight, false);
+  assert.equal(json.occupancy.solidCells, 0);
+  assert.match(json.failures.join(' '), /no solid geometry/);
+  const obj = V.auditExportFile('o empty\n', 'empty.obj');
+  assert.equal(obj.verdict, 'EMPTY');
+  const vox = V.auditExportFile(V.exportVOX(emptyGrid), 'empty.vox');
+  assert.equal(vox.verdict, 'EMPTY');
+});
+
+test('CI and the README both run the unified npm test command covering all four suites', () => {
+  const ci = fs.readFileSync(__dirname + '/.github/workflows/ci.yml', 'utf8');
+  assert.match(ci, /npm test/);
+  assert.doesNotMatch(ci, /node --test/);
+  const pkg = JSON.parse(fs.readFileSync(__dirname + '/package.json', 'utf8'));
+  for (const file of ['test.js', 'export-test.js', 'integrity-test.js', 'ui-test.js']) {
+    assert.ok(pkg.scripts.test.includes(file), 'npm test misses ' + file);
+  }
+  const readme = fs.readFileSync(__dirname + '/README.md', 'utf8');
+  assert.match(readme, /npm test/);
 });
 
 /* ----------------------------- Studio UI ----------------------------- */

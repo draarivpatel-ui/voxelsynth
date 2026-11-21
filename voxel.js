@@ -521,7 +521,7 @@
   function analyzeMesh(mesh) {
     assertMesh(mesh);
     var vertices = mesh.vertices, triangles = mesh.triangles;
-    var edges = new Map(), links = new Map();
+    var edges = new Map(), links = new Map(), faceKeys = new Map(), duplicateTriangles = 0;
     var parent = triangles.map(function (_, i) { return i; });
     function find(i) {
       while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
@@ -533,6 +533,11 @@
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     triangles.forEach(function (ids, t) {
       var a = vertices[ids[0]], b = vertices[ids[1]], c = vertices[ids[2]];
+      /* Coincident faces: the same unordered vertex triple appearing twice
+       * is a doubled sheet, not a thicker wall. */
+      var faceKey = [pointKey(a), pointKey(b), pointKey(c)].sort().join('|');
+      if (faceKeys.has(faceKey)) duplicateTriangles++;
+      else faceKeys.set(faceKey, true);
       area += length3(cross3(sub3(b, a), sub3(c, a))) / 2;
       var term = dot3(sub3(a, reference), cross3(sub3(b, reference), sub3(c, reference))) / 6 - correction;
       var sum = volume + term;
@@ -581,7 +586,7 @@
     });
     var components = new Set(triangles.map(function (_, i) { return find(i); })).size;
     var chi = links.size - edges.size + triangles.length;
-    var manifold = triangles.length > 0 && unmatched === 0 && nonManifoldVertices === 0;
+    var manifold = triangles.length > 0 && unmatched === 0 && nonManifoldVertices === 0 && duplicateTriangles === 0;
     return {
       triangleCount: triangles.length,
       uniqueVertices: links.size,
@@ -598,7 +603,8 @@
       nonManifoldEdges: nonManifoldEdges,
       nonManifoldVertices: nonManifoldVertices,
       windingErrors: windingErrors,
-      unmatchedEdges: unmatched
+      unmatchedEdges: unmatched,
+      duplicateTriangles: duplicateTriangles
     };
   }
 
@@ -1395,7 +1401,9 @@
    * chunk padded with zeros, each chunk length aligned to four bytes. The
    * BIN block stores float32 positions, float32 per-vertex normals and
    * uint32 triangle indices; per-vertex normals accumulate the unit facet
-   * normals at every corner. */
+   * normals at every corner. glTF 2.0 measures distances in meters, so the
+   * engine's millimeter vertices are divided by 1000 on export and the
+   * POSITION accessor bounds record the same meter values. */
   function exportGLB(mesh, name) {
     assertMesh(mesh);
     if (!mesh.triangles.length) throw new RangeError('binary glTF export needs a nonempty manifold');
@@ -1407,10 +1415,11 @@
     var indices = new Uint32Array(triangleCount * 3);
     var firstNormal = new Array(vertexCount);
     var min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    var toMeters = function (mm) { return mm / 1000; };
     for (i = 0; i < vertexCount; i++) {
       var v = mesh.vertices[i];
       for (j = 0; j < 3; j++) {
-        var rounded = Math.fround(v[j]);
+        var rounded = Math.fround(toMeters(v[j]));
         if (!Number.isFinite(rounded)) throw new RangeError('binary glTF float32 precision lost a vertex; use ASCII STL or OBJ');
         positions[i * 3 + j] = rounded;
         if (rounded < min[j]) min[j] = rounded;
@@ -1420,7 +1429,7 @@
     var facets = meshFacets(mesh);
     for (i = 0; i < facets.length; i++) {
       var f = facets[i];
-      var roundedFacet = f.vertices.map(function (point) { return point.map(Math.fround); });
+      var roundedFacet = f.vertices.map(function (point) { return point.map(function (value) { return Math.fround(toMeters(value)); }); });
       if (dot3(f.normal, cross3(sub3(roundedFacet[1], roundedFacet[0]), sub3(roundedFacet[2], roundedFacet[0]))) <= 0) {
         throw new RangeError('binary glTF float32 precision would collapse a facet; use ASCII STL or OBJ');
       }
@@ -1483,9 +1492,14 @@
   }
 
   /* Validates the indexed-triangle glTF 2.0 subset written above, extended
-   * to multi-mesh files: every primitive must be mode 4 (triangles) with a
-   * POSITION and an index accessor. Node transforms are not applied; equal
-   * positions across primitives weld back into shared vertices. */
+   * to scene-graph instancing: the active scene's nodes are traversed and
+   * each node's world transform (a 4x4 matrix or T * R * S) is composed, so
+   * every referenced mesh is instanced into world space with its true
+   * triangle count, bounds, normals and signed volume. glTF distances are
+   * meters; world positions are converted to millimeters for the internal
+   * audit, equal world positions weld into shared vertices, and a negative
+   * determinant transform flips winding back to outward. Meshes the scene
+   * never references are not part of the audited geometry. */
   function parseGLB(input) {
     var bytes = Object.prototype.toString.call(input) === '[object ArrayBuffer]' ? new Uint8Array(input) : input;
     if (!bytes || Object.prototype.toString.call(bytes) !== '[object Uint8Array]' || bytes.byteLength < 20) {
@@ -1537,51 +1551,144 @@
       }
       return { data: out, count: accessor.count, items: items };
     }
+    /* Column-major 4x4 helpers for node world transforms. */
+    function matIdentity() { return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; }
+    function matMultiply(a, b) {
+      var out = new Array(16);
+      for (var c = 0; c < 4; c++) for (var r = 0; r < 4; r++) {
+        out[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+      }
+      return out;
+    }
+    function matPoint(m, p) {
+      return [
+        m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+        m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+        m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]
+      ];
+    }
+    function matDet3(m) {
+      return m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9]) + m[8] * (m[1] * m[6] - m[2] * m[5]);
+    }
+    function nodeVec(node, prop, fallback, index) {
+      var value = node[prop];
+      if (value === undefined) return fallback;
+      if (!Array.isArray(value) || !value.every(Number.isFinite)) {
+        throw new TypeError('glTF node ' + index + ' ' + prop + ' must hold finite numbers');
+      }
+      return value;
+    }
+    function nodeLocalMatrix(node, index) {
+      if (node.matrix !== undefined) {
+        if (!Array.isArray(node.matrix) || node.matrix.length !== 16 || !node.matrix.every(Number.isFinite)) {
+          throw new TypeError('glTF node ' + index + ' matrix must hold sixteen finite numbers');
+        }
+        return node.matrix;
+      }
+      var t = nodeVec(node, 'translation', [0, 0, 0], index);
+      var s = nodeVec(node, 'scale', [1, 1, 1], index);
+      var q = nodeVec(node, 'rotation', [0, 0, 0, 1], index);
+      if (t.length !== 3 || s.length !== 3 || q.length !== 4) throw new TypeError('glTF node ' + index + ' transform has a wrong component count');
+      var x = q[0], y = q[1], z = q[2], w = q[3];
+      var n = Math.sqrt(x * x + y * y + z * z + w * w);
+      if (!(n > 0)) throw new TypeError('glTF node ' + index + ' rotation quaternion is zero');
+      x /= n; y /= n; z /= n; w /= n;
+      var m = [
+        1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
+        2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
+        2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
+        t[0], t[1], t[2], 1
+      ];
+      for (var c = 0; c < 3; c++) for (var r = 0; r < 3; r++) m[c * 4 + r] *= s[c];
+      return m;
+    }
     var lookup = new Map();
     var mesh = { vertices: [], triangles: [], normals: [], nonUnitNormalCount: 0 };
-    gltf.meshes.forEach(function (gltfMesh) {
+    function emitPrimitive(primitive, world) {
+      if (primitive.mode !== undefined && primitive.mode !== 4) throw new TypeError('glTF only supports triangle primitives');
+      if (primitive.attributes === undefined || !Number.isInteger(primitive.attributes.POSITION) || !Number.isInteger(primitive.indices)) {
+        throw new TypeError('glTF primitives need POSITION and indices accessors');
+      }
+      var positions = readAccessor(primitive.attributes.POSITION, 'POSITION', [5126], 3);
+      if (positions.count === 0) throw new TypeError('glTF POSITION must hold VEC3 vertices');
+      var ids = readAccessor(primitive.indices, 'indices', [5123, 5125], 1);
+      if (ids.count % 3 !== 0 || ids.count === 0) throw new TypeError('glTF indices must count whole triangles');
+      if (Number.isInteger(primitive.attributes.NORMAL)) {
+        var declared = readAccessor(primitive.attributes.NORMAL, 'NORMAL', [5126], 3);
+        if (declared.count !== positions.count) throw new TypeError('glTF NORMAL must match POSITION');
+        for (var n = 0; n < declared.data.length; n += 3) {
+          var nl = Math.sqrt(declared.data[n] * declared.data[n] + declared.data[n + 1] * declared.data[n + 1] + declared.data[n + 2] * declared.data[n + 2]);
+          if (!Number.isFinite(nl) || Math.abs(nl - 1) > 1e-3) mesh.nonUnitNormalCount++;
+        }
+      }
+      var flip = matDet3(world) < 0;
+      var remap = new Map();
+      for (var t = 0; t < ids.count; t++) {
+        var source = ids.data[t];
+        if (!Number.isInteger(source) || source < 0 || source >= positions.count) throw new TypeError('glTF index out of range');
+        var target = remap.get(source);
+        if (target === undefined) {
+          var point = matPoint(world, [positions.data[source * 3], positions.data[source * 3 + 1], positions.data[source * 3 + 2]]);
+          point = [point[0] * 1000, point[1] * 1000, point[2] * 1000];
+          if (!point.every(Number.isFinite)) throw new TypeError('glTF node transform produces a nonfinite vertex');
+          var key = pointKey(point);
+          if (lookup.has(key)) target = lookup.get(key);
+          else { target = mesh.vertices.length; lookup.set(key, target); mesh.vertices.push(point); }
+          remap.set(source, target);
+        }
+        if (t % 3 === 2) {
+          var tri = [remap.get(ids.data[t - 2]), remap.get(ids.data[t - 1]), target];
+          if (flip) { var hold = tri[1]; tri[1] = tri[2]; tri[2] = hold; }
+          var a = mesh.vertices[tri[0]], b = mesh.vertices[tri[1]], c2 = mesh.vertices[tri[2]];
+          var cross = cross3(sub3(b, a), sub3(c2, a));
+          var len = length3(cross);
+          if (!Number.isFinite(len) || len === 0) throw new TypeError('glTF contains a degenerate face');
+          mesh.triangles.push(tri);
+          mesh.normals.push(cross.map(function (n) { return n / len; }));
+        }
+      }
+    }
+    function emitMesh(meshIndex, world) {
+      if (!Number.isInteger(meshIndex) || meshIndex < 0 || meshIndex >= gltf.meshes.length) {
+        throw new TypeError('glTF node references a missing mesh');
+      }
+      var gltfMesh = gltf.meshes[meshIndex];
       if (!Array.isArray(gltfMesh.primitives) || !gltfMesh.primitives.length) throw new TypeError('glTF mesh has no primitives');
-      gltfMesh.primitives.forEach(function (primitive) {
-        if (primitive.mode !== undefined && primitive.mode !== 4) throw new TypeError('glTF only supports triangle primitives');
-        if (primitive.attributes === undefined || !Number.isInteger(primitive.attributes.POSITION) || !Number.isInteger(primitive.indices)) {
-          throw new TypeError('glTF primitives need POSITION and indices accessors');
-        }
-        var positions = readAccessor(primitive.attributes.POSITION, 'POSITION', [5126], 3);
-        if (positions.count === 0) throw new TypeError('glTF POSITION must hold VEC3 vertices');
-        var ids = readAccessor(primitive.indices, 'indices', [5123, 5125], 1);
-        if (ids.count % 3 !== 0 || ids.count === 0) throw new TypeError('glTF indices must count whole triangles');
-        if (Number.isInteger(primitive.attributes.NORMAL)) {
-          var declared = readAccessor(primitive.attributes.NORMAL, 'NORMAL', [5126], 3);
-          if (declared.count !== positions.count) throw new TypeError('glTF NORMAL must match POSITION');
-          for (var n = 0; n < declared.data.length; n += 3) {
-            var nl = Math.sqrt(declared.data[n] * declared.data[n] + declared.data[n + 1] * declared.data[n + 1] + declared.data[n + 2] * declared.data[n + 2]);
-            if (!Number.isFinite(nl) || Math.abs(nl - 1) > 1e-3) mesh.nonUnitNormalCount++;
-          }
-        }
-        var remap = new Map();
-        for (var t = 0; t < ids.count; t++) {
-          var source = ids.data[t];
-          if (!Number.isInteger(source) || source < 0 || source >= positions.count) throw new TypeError('glTF index out of range');
-          var target = remap.get(source);
-          if (target === undefined) {
-            var point = [positions.data[source * 3], positions.data[source * 3 + 1], positions.data[source * 3 + 2]];
-            var key = pointKey(point);
-            if (lookup.has(key)) target = lookup.get(key);
-            else { target = mesh.vertices.length; lookup.set(key, target); mesh.vertices.push(point); }
-            remap.set(source, target);
-          }
-          if (t % 3 === 2) {
-            var tri = [remap.get(ids.data[t - 2]), remap.get(ids.data[t - 1]), target];
-            var a = mesh.vertices[tri[0]], b = mesh.vertices[tri[1]], c2 = mesh.vertices[tri[2]];
-            var cross = cross3(sub3(b, a), sub3(c2, a));
-            var len = length3(cross);
-            if (!Number.isFinite(len) || len === 0) throw new TypeError('glTF contains a degenerate face');
-            mesh.triangles.push(tri);
-            mesh.normals.push(cross.map(function (n) { return n / len; }));
-          }
-        }
+      gltfMesh.primitives.forEach(function (primitive) { emitPrimitive(primitive, world); });
+    }
+    function visitNode(index, parentWorld, stack) {
+      var node = Array.isArray(gltf.nodes) ? gltf.nodes[index] : undefined;
+      if (!node || typeof node !== 'object') throw new TypeError('glTF scene references a missing node');
+      if (stack.has(index)) throw new TypeError('glTF node graph contains a cycle');
+      var world = matMultiply(parentWorld, nodeLocalMatrix(node, index));
+      if (node.mesh !== undefined) emitMesh(node.mesh, world);
+      var children = nodeVec(node, 'children', [], index);
+      if (!children.every(Number.isInteger)) throw new TypeError('glTF node ' + index + ' children must be node indices');
+      stack.add(index);
+      children.forEach(function (child) { visitNode(child, world, stack); });
+      stack.delete(index);
+    }
+    var roots = [];
+    if (Array.isArray(gltf.scenes) && gltf.scenes.length) {
+      var sceneIndex = gltf.scene === undefined ? 0 : gltf.scene;
+      if (!Number.isInteger(sceneIndex) || sceneIndex < 0 || sceneIndex >= gltf.scenes.length) {
+        throw new TypeError('glTF scene index is out of range');
+      }
+      var scene = gltf.scenes[sceneIndex];
+      roots = scene && Array.isArray(scene.nodes) ? scene.nodes : [];
+      if (!roots.every(Number.isInteger)) throw new TypeError('glTF scene nodes must be node indices');
+    } else if (Array.isArray(gltf.nodes)) {
+      var hasParent = {};
+      gltf.nodes.forEach(function (node, index) {
+        nodeVec(node || {}, 'children', [], index).forEach(function (child) { hasParent[child] = true; });
       });
-    });
+      gltf.nodes.forEach(function (node, index) { if (!hasParent[index]) roots.push(index); });
+    }
+    if (!roots.length && !Array.isArray(gltf.nodes)) {
+      gltf.meshes.forEach(function (_, index) { emitMesh(index, matIdentity()); });
+    } else {
+      roots.forEach(function (index) { visitNode(index, matIdentity(), new Set()); });
+    }
     assertMesh(mesh);
     return mesh;
   }
@@ -1704,6 +1811,7 @@
       nonManifoldEdges: a.nonManifoldEdges,
       nonManifoldVertices: a.nonManifoldVertices,
       windingErrors: a.windingErrors,
+      duplicateTriangles: a.duplicateTriangles,
       degenerateTriangles: degenerate,
       nonUnitNormals: mesh.nonUnitNormalCount || 0,
       surfaceAreaMm2: a.surfaceAreaMm2,
@@ -1772,6 +1880,18 @@
       return report;
     }
     var m = report.mesh;
+    /* A file that parses but carries no solid geometry is not a geometry
+     * pass: an empty part has no closed surface to certify. */
+    if (!m.triangles) {
+      report.verdict = 'EMPTY';
+      report.failures.push('The file parses but contains no solid geometry, so there is no closed surface to certify.');
+      return report;
+    }
+    if (m.duplicateTriangles) report.failures.push(m.duplicateTriangles + ' coincident triangle(s) reuse the same three vertices as another facet');
+    /* A closed surface whose signed volume is not positive faces inward or
+     * encloses nothing. Nested cavity shells stay valid because their
+     * inward area only subtracts from a larger outward volume. */
+    if (!(m.volumeMm3 > 0)) report.failures.push('Net signed volume is ' + m.volumeMm3 + ' mm3, not positive; a valid solid encloses positive volume with outward faces');
     if (m.boundaryEdges) report.failures.push(m.boundaryEdges + ' boundary edge(s) break the closed surface');
     if (m.nonManifoldEdges) report.failures.push(m.nonManifoldEdges + ' edge(s) carry more than two facets');
     if (m.nonManifoldVertices) report.failures.push(m.nonManifoldVertices + ' vertex link(s) fail to close into one ring');

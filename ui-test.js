@@ -142,6 +142,70 @@ test('shortcuts respect form fields, contenteditable regions and browser modifie
   clean(w);
 });
 
+test('single-key commands never fire while an unrelated control has focus', () => {
+  const w = createWorkspace(), before = occupancy(w);
+  w.get('theme-toggle').focus();
+  w.key('r');
+  assert.deepEqual(occupancy(w), before);
+  w.key('w');
+  assert.equal(w.get('toggle-wire').getAttribute('aria-pressed'), 'false');
+  w.key('t');
+  assert.equal(w.studio.inspect().stats.watertight, true);
+  w.key('R');
+  assert.deepEqual(occupancy(w), before);
+  clean(w);
+});
+
+test('the Single-key shortcuts toggle gates every printable key and persists to storage', () => {
+  const w = createWorkspace(), before = occupancy(w), cells = w.studio.snapshot().cells;
+  const toggle = w.get('shortcuts-toggle');
+  assert.equal(toggle.getAttribute('aria-label'), 'Single-key shortcuts');
+  assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+  assert.equal(w.studio.inspect().shortcuts, true);
+  toggle.click();
+  assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+  assert.equal(toggle.textContent, 'Shortcuts off');
+  assert.equal(w.studio.inspect().shortcuts, false);
+  assert.equal(w.storage['voxelsynth-shortcuts'], 'off');
+  for (const key of ['r', 'm', 'w', 'p', 'v', 'n', 'i', 'o', 'f', 'e', 'g', 'u', 'l', 'b', 'c', 's', 'a', 'd', 'x', 'y', 'h', 't', '1', '2', '?', '[', ']']) w.key(key);
+  assert.deepEqual(occupancy(w), before);
+  assert.equal(w.studio.snapshot().cells, cells);
+  assert.equal(w.get('toggle-wire').getAttribute('aria-pressed'), 'false');
+  assert.equal(w.get('help-panel').hidden, true);
+  assert.match(w.get('live-announcer').textContent, /shortcuts off/i);
+  toggle.click();
+  assert.equal(w.studio.inspect().shortcuts, true);
+  assert.equal(w.storage['voxelsynth-shortcuts'], 'on');
+  w.key('w', { target: w.document.body });
+  assert.equal(w.get('toggle-wire').getAttribute('aria-pressed'), 'true');
+  clean(w);
+});
+
+test('a stored off preference boots with single-key shortcuts disabled while arrows stay live', () => {
+  const w = createWorkspace({ storage: { 'voxelsynth-shortcuts': 'off' } });
+  assert.equal(w.studio.inspect().shortcuts, false);
+  assert.equal(w.get('shortcuts-toggle').getAttribute('aria-pressed'), 'false');
+  const before = occupancy(w);
+  w.key('m'); w.key('r');
+  assert.deepEqual(occupancy(w), before);
+  assert.equal(w.get('mirror-x').clickCount, 0);
+  w.key('ArrowRight', { target: w.document.body });
+  assert.equal(w.studio.inspect().yawDeg, 40);
+  clean(w);
+});
+
+test('enabled shortcuts still drive the workspace from the page body or the focused canvas', () => {
+  const w = createWorkspace();
+  w.key('r', { target: w.document.body });
+  assert.equal(w.studio.inspect().stats.voxelCount, 0);
+  w.key('z', { target: w.document.body, ctrlKey: true });
+  assert.ok(w.studio.inspect().stats.voxelCount > 0);
+  w.get('viewport').focus();
+  w.key('m');
+  assert.equal(w.get('mirror-x').clickCount, 1);
+  clean(w);
+});
+
 test('top view uses the full 90 degree range and slice controls stay synchronized', () => {
   const w = createWorkspace(); w.get('view-top').click();
   assert.equal(w.studio.inspect().pitchDeg, 90); assert.equal(w.get('pitch').value, '90');

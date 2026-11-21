@@ -28,7 +28,8 @@
     undo: [], redo: [], presetName: 'deskOrganizer', verification: null, infillPercent: 100, material: 'PLA',
     artMode: false, turntable: false, turntableTimer: null, lighting: false,
     sliceAxis: 'z', printCheck: false, printStats: null, floatingSet: null, overhangSet: null, thinSet: null,
-    symmetry: 'off', gallery: false, galleryPaused: false, galleryTimer: null, galleryOwnsTurntable: false, occBounds: null
+    symmetry: 'off', gallery: false, galleryPaused: false, galleryTimer: null, galleryOwnsTurntable: false, occBounds: null,
+    shortcuts: true
   };
 
   var SCULPTURE_INFO = {
@@ -1470,6 +1471,16 @@
     announce(theme === 'dark' ? 'Dark theme.' : 'Light theme.');
   }
 
+  /* WCAG 2.1.4 off switch for every single-character command, remembered
+   * on this device. Non-printable keys and canvas Space/Enter stay live. */
+  function setShortcuts(enabled) {
+    state.shortcuts = !!enabled;
+    var button = $('shortcuts-toggle');
+    button.setAttribute('aria-pressed', String(state.shortcuts));
+    button.textContent = state.shortcuts ? 'Shortcuts on' : 'Shortcuts off';
+    try { localStorage.setItem('voxelsynth-shortcuts', state.shortcuts ? 'on' : 'off'); } catch (error) { /* Shortcuts still work without storage. */ }
+  }
+
   function setView(yaw, pitch) {
     clearHover();
     state.yawDeg = Math.max(-180, Math.min(180, yaw));
@@ -1586,6 +1597,10 @@
       state.material = this.value; updateDiagnostics();
     });
     on('theme-toggle', 'click', function () { setTheme(state.theme === 'dark' ? 'light' : 'dark'); });
+    on('shortcuts-toggle', 'click', function () {
+      setShortcuts(!state.shortcuts);
+      announce(state.shortcuts ? 'Single-key shortcuts on.' : 'Single-key shortcuts off.');
+    });
     on('help-toggle', 'click', function () {
       var panel = $('help-panel'); panel.hidden = !panel.hidden; this.setAttribute('aria-expanded', String(!panel.hidden));
       announce(panel.hidden ? 'Keyboard reference closed.' : 'Keyboard reference open.');
@@ -1720,58 +1735,78 @@
         }
         return;
       }
+      /* WCAG 2.1.4: single-character commands run only while the header's
+       * Single-key shortcuts toggle is on, and never while an unrelated
+       * control such as a button or link has focus. Non-printable keys
+       * (arrows, PageUp/PageDown, modifier combos, canvas Space/Enter) are
+       * not character-key shortcuts and always stay live. */
+      var role = target.getAttribute ? target.getAttribute('role') : null;
+      var onControl = ['a', 'button', 'input', 'select', 'textarea', 'option', 'optgroup', 'summary'].indexOf(tag) >= 0 ||
+        (role !== null && ['button', 'link', 'switch', 'checkbox', 'tab', 'menuitem', 'slider', 'spinbutton', 'textbox', 'combobox', 'listbox'].indexOf(role) >= 0);
       var presets = ['deskOrganizer', 'sdCardVault', 'cableComb', 'rpiPicoMount', 'sdfDock'];
-      var index = Number(key) - 1;
-      if (/^[1-5]$/.test(key)) { event.preventDefault(); loadPreset(presets[index], true); return; }
-      var handled = true;
-      switch (key.toLowerCase()) {
-        case 'b': state.primitive = 'box'; setSegment('[data-prim]', 'box'); updateChips(); break;
-        case 'c': state.primitive = 'cylinder'; setSegment('[data-prim]', 'cylinder'); updateChips(); break;
-        case 's': state.primitive = 'sphere'; setSegment('[data-prim]', 'sphere'); updateChips(); break;
-        case 'a': state.operation = 'add'; setSegment('[data-op]', 'add'); updateChips(); break;
-        case 'd': state.operation = 'subtract'; setSegment('[data-op]', 'subtract'); updateChips(); break;
-        case 'm': $('mirror-x').click(); break;
-        case 'x': setSymmetry(state.symmetry === 'x' ? 'off' : 'x'); break;
-        case 'y': setSymmetry(state.symmetry === 'y' ? 'off' : 'y'); break;
-        case 'h': $('apply-shell').click(); break;
-        case 't': $('theme-toggle').click(); break;
-        case 'r': $('reset-grid').click(); break;
-        case 'w': $('toggle-wire').click(); break;
-        case 'p': $('toggle-print').click(); break;
-        case 'v': $('verify-exports').click(); break;
-        case 'i': state.zoom = 1; setView(35, 28); announce('Isometric view.'); break;
-        case 'o': setView(0, 90); announce('Top view.'); break;
-        case 'f': setView(0, 0); announce('Front view.'); break;
-        case 'n': $('apply-grid').click(); break;
-        case '[': cycleSliceAxis(-1); break;
-        case ']': cycleSliceAxis(1); break;
-        case 'e': artKey(exportExhibitionPlate, 'Exhibition plate export'); break;
-        case 'g': artKey(toggleGallery, 'Gallery tour'); break;
-        case 'u': artKey(toggleTurntable, 'Turntable'); break;
-        case 'l': artKey(toggleLighting, 'Exhibition lighting'); break;
-        case '?': $('help-toggle').click(); break;
-        case 'arrowleft': setView(state.yawDeg - 5, state.pitchDeg); announceView(); break;
-        case 'arrowright': setView(state.yawDeg + 5, state.pitchDeg); announceView(); break;
-        case 'arrowup': setView(state.yawDeg, state.pitchDeg + 5); announceView(); break;
-        case 'arrowdown': setView(state.yawDeg, state.pitchDeg - 5); announceView(); break;
-        case 'pageup': setSlice(state.slice + 1); break;
-        case 'pagedown': setSlice(state.slice - 1); break;
-        default: handled = false;
+      if (key.length === 1) {
+        if (!state.shortcuts || onControl) return;
+        var index = Number(key) - 1;
+        if (/^[1-5]$/.test(key)) { event.preventDefault(); loadPreset(presets[index], true); return; }
+        var handled = true;
+        switch (key.toLowerCase()) {
+          case 'b': state.primitive = 'box'; setSegment('[data-prim]', 'box'); updateChips(); break;
+          case 'c': state.primitive = 'cylinder'; setSegment('[data-prim]', 'cylinder'); updateChips(); break;
+          case 's': state.primitive = 'sphere'; setSegment('[data-prim]', 'sphere'); updateChips(); break;
+          case 'a': state.operation = 'add'; setSegment('[data-op]', 'add'); updateChips(); break;
+          case 'd': state.operation = 'subtract'; setSegment('[data-op]', 'subtract'); updateChips(); break;
+          case 'm': $('mirror-x').click(); break;
+          case 'x': setSymmetry(state.symmetry === 'x' ? 'off' : 'x'); break;
+          case 'y': setSymmetry(state.symmetry === 'y' ? 'off' : 'y'); break;
+          case 'h': $('apply-shell').click(); break;
+          case 't': $('theme-toggle').click(); break;
+          case 'r': $('reset-grid').click(); break;
+          case 'w': $('toggle-wire').click(); break;
+          case 'p': $('toggle-print').click(); break;
+          case 'v': $('verify-exports').click(); break;
+          case 'i': state.zoom = 1; setView(35, 28); announce('Isometric view.'); break;
+          case 'o': setView(0, 90); announce('Top view.'); break;
+          case 'f': setView(0, 0); announce('Front view.'); break;
+          case 'n': $('apply-grid').click(); break;
+          case '[': cycleSliceAxis(-1); break;
+          case ']': cycleSliceAxis(1); break;
+          case 'e': artKey(exportExhibitionPlate, 'Exhibition plate export'); break;
+          case 'g': artKey(toggleGallery, 'Gallery tour'); break;
+          case 'u': artKey(toggleTurntable, 'Turntable'); break;
+          case 'l': artKey(toggleLighting, 'Exhibition lighting'); break;
+          case '?': $('help-toggle').click(); break;
+          default: handled = false;
+        }
+        if (handled) event.preventDefault();
+        return;
       }
-      if (handled) event.preventDefault();
+      switch (key) {
+        case 'ArrowLeft': setView(state.yawDeg - 5, state.pitchDeg); announceView(); break;
+        case 'ArrowRight': setView(state.yawDeg + 5, state.pitchDeg); announceView(); break;
+        case 'ArrowUp': setView(state.yawDeg, state.pitchDeg + 5); announceView(); break;
+        case 'ArrowDown': setView(state.yawDeg, state.pitchDeg - 5); announceView(); break;
+        case 'PageUp': setSlice(state.slice + 1); break;
+        case 'PageDown': setSlice(state.slice - 1); break;
+        default: return;
+      }
+      event.preventDefault();
     }));
     window.addEventListener('resize', render);
     if (typeof ResizeObserver === 'function') new ResizeObserver(render).observe(canvas);
   }
 
   function init() {
-    var stored = 'light';
-    try { stored = localStorage.getItem('voxelsynth-theme') || 'light'; } catch (error) { /* Local storage is optional. */ }
+    var stored = 'light', storedShortcuts = 'on';
+    try {
+      stored = localStorage.getItem('voxelsynth-theme') || 'light';
+      storedShortcuts = localStorage.getItem('voxelsynth-shortcuts') || 'on';
+    } catch (error) { /* Local storage is optional. */ }
     state.grid = V.loadPreset('deskOrganizer');
     state.slice = Math.floor(state.grid.nz / 2); state.selected[2] = state.slice;
     state.theme = stored === 'dark' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', state.theme);
     $('theme-toggle').textContent = state.theme === 'dark' ? 'Light theme' : 'Dark theme';
+    setShortcuts(storedShortcuts !== 'off');
     /* On phone-width screens keep the long diagnostics table behind its
      * summary so controls stay within reach; the full table remains one tap. */
     if (window.innerWidth <= 540) document.querySelectorAll('.diagnostics-details').forEach(function (details) { details.open = false; });
@@ -1786,7 +1821,7 @@
         inset: Object.assign({}, state.inset), faceCount: state.faces.length, sliceOnly: state.sliceOnly, showSlice: state.showSlice,
         stats: Object.assign({}, state.mesh.stats), history: { undo: state.undo.length, redo: state.redo.length },
         artMode: state.artMode, sculpture: sculptureKey(), turntable: state.turntable, lighting: state.lighting,
-        symmetry: state.symmetry, gallery: state.gallery, galleryPaused: state.galleryPaused,
+        symmetry: state.symmetry, gallery: state.gallery, galleryPaused: state.galleryPaused, shortcuts: state.shortcuts,
         galleryOwnsTurntable: state.galleryOwnsTurntable, printCheck: state.printCheck,
         print: state.printStats ? {
           printable: state.printStats.printable, overhangCells: state.printStats.overhangCells,
