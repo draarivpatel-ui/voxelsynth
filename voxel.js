@@ -1891,18 +1891,65 @@
     return false;
   }
 
+  /* Coplanar facets have no separating axis among the eleven 3D
+   * candidates: every one collapses onto the shared plane normal, so the
+   * 3D test would report contact for any two facets in one plane. Drop
+   * the dominant normal axis, project both triangles to 2D and run the
+   * full six edge normal SAT. Projections that only touch still count as
+   * separated, so facets hinged on a shared edge on opposite sides do not
+   * intersect while facets folded back over each other do. */
+  function triTriHit2D(a1, b1, c1, a2, b2, c2, drop) {
+    var d1 = (drop + 1) % 3, d2 = (drop + 2) % 3;
+    var tris = [
+      [[a1[d1], a1[d2]], [b1[d1], b1[d2]], [c1[d1], c1[d2]]],
+      [[a2[d1], a2[d2]], [b2[d1], b2[d2]], [c2[d1], c2[d2]]]
+    ];
+    for (var t = 0; t < 2; t++) {
+      var v = tris[t];
+      for (var e = 0; e < 3; e++) {
+        var ex = v[(e + 1) % 3][0] - v[e][0], ey = v[(e + 1) % 3][1] - v[e][1];
+        var ax = ey, ay = -ex;
+        if (ax * ax + ay * ay < 1e-24) continue;
+        var lo1 = Infinity, hi1 = -Infinity, lo2 = Infinity, hi2 = -Infinity;
+        for (var k = 0; k < 3; k++) {
+          var s1 = tris[0][k][0] * ax + tris[0][k][1] * ay;
+          var s2 = tris[1][k][0] * ax + tris[1][k][1] * ay;
+          if (s1 < lo1) lo1 = s1;
+          if (s1 > hi1) hi1 = s1;
+          if (s2 < lo2) lo2 = s2;
+          if (s2 > hi2) hi2 = s2;
+        }
+        if (hi1 < lo2 + 1e-9 || hi2 < lo1 + 1e-9) return false;
+      }
+    }
+    return true;
+  }
+
   /* Triangle-triangle contact test by separating axis: two triangles fail
    * to intersect only when one of the eleven candidate axes (both face
    * normals plus the nine edge-pair cross products) separates their
    * projections. Touching counts as intersecting, because a cavity wall
    * that shares area or contact with its outer shell is not strictly
-   * enclosed by it. */
+   * enclosed by it. Coplanar pairs take the 2D branch above instead. */
   function triTriHit(a1, b1, c1, a2, b2, c2) {
     var edges = [
       sub3(b1, a1), sub3(c1, a1), sub3(c1, b1),
       sub3(b2, a2), sub3(c2, a2), sub3(c2, b2)
     ];
-    var axes = [cross3(edges[0], edges[1]), cross3(edges[3], edges[4])];
+    var n1 = cross3(edges[0], edges[1]);
+    var n2 = cross3(edges[3], edges[4]);
+    var n1l = length3(n1), n2l = length3(n2);
+    var span = Math.max(length3(edges[0]), length3(edges[1]), length3(edges[2]),
+                        length3(edges[3]), length3(edges[4]), length3(edges[5]));
+    if (n1l > 0 && n2l > 0 && span > 0 &&
+        length3(cross3(n1, n2)) <= 1e-9 * n1l * n2l &&
+        Math.abs(dot3(sub3(a2, a1), n1)) <= 1e-9 * n1l * span) {
+      var drop = 0, best = Math.abs(n1[0]);
+      if (Math.abs(n1[1]) > best) { best = Math.abs(n1[1]); drop = 1; }
+      if (Math.abs(n1[2]) > best) { best = Math.abs(n1[2]); drop = 2; }
+      return triTriHit2D(a1, b1, c1, a2, b2, c2, drop);
+    }
+    var axes = [n1, n2];
     for (var i = 0; i < 3; i++) {
       for (var j = 3; j < 6; j++) axes.push(cross3(edges[i], edges[j]));
     }
@@ -1935,6 +1982,114 @@
     });
   }
 
+  function mod2pi(x) { var r = x % (2 * Math.PI); return r < 0 ? r + 2 * Math.PI : r; }
+
+  /* Angular span of a triangle's apex cone, returned as [start, length]
+   * with the length below pi because a real triangle angle is below 180
+   * degrees. Null means the two edges are parallel, a degenerate case the
+   * mesh validator already rejects. */
+  function coneSpan(a, b) {
+    var d = mod2pi(b - a);
+    if (d === 0) return null;
+    if (d < Math.PI) return [a, d];
+    if (d > Math.PI) return [b, 2 * Math.PI - d];
+    return [a, Math.PI];
+  }
+
+  /* Two coplanar facets sharing one vertex A meet beyond A exactly when
+   * their apex wedges share a ray: that ray is a segment lying in both
+   * facets. The wedges are compared as arcs on the dominant 2D plane. */
+  function vertexWedgeOverlap2D(e1, e2, n) {
+    var drop = 0, best = Math.abs(n[0]);
+    if (Math.abs(n[1]) > best) { best = Math.abs(n[1]); drop = 1; }
+    if (Math.abs(n[2]) > best) { best = Math.abs(n[2]); drop = 2; }
+    var d1 = (drop + 1) % 3, d2 = (drop + 2) % 3;
+    function ang(e) { return Math.atan2(e[d2], e[d1]); }
+    var a1 = coneSpan(ang(e1[0]), ang(e1[1]));
+    var a2 = coneSpan(ang(e2[0]), ang(e2[1]));
+    if (!a1 || !a2) return true;
+    var s2 = mod2pi(a2[0] - a1[0]);
+    return !(s2 > a1[1] && s2 + a2[1] < 2 * Math.PI);
+  }
+
+  /* Across different planes the two wedges can only share the line where
+   * the planes meet. The line enters each wedge along at most one ray, so
+   * the facets cross beyond A exactly when both wedges take the same ray
+   * of that line. Returns +1, -1 or 0 for the ray direction taken. */
+  function wedgeRaySign(u, v, n, l) {
+    var lp = length3(l);
+    var wx = l[0] / lp, wy = l[1] / lp, wz = l[2] / lp;
+    var tol = 1e-9 * length3(n) * Math.max(length3(u), length3(v));
+    function inside(x, y, z) {
+      return dot3(cross3(u, [x, y, z]), n) >= -tol &&
+             dot3(cross3([x, y, z], v), n) >= -tol;
+    }
+    if (inside(wx, wy, wz)) return 1;
+    if (inside(-wx, -wy, -wz)) return -1;
+    return 0;
+  }
+
+  /* Two facets of one shell that share vertex indices are neighbours, not
+   * strangers: they may touch inside the shared vertex set but must not
+   * cross beyond it. This reports that beyond-contact exactly. A shared
+   * edge in non-coplanar facets always meets along the edge alone; a
+   * shared vertex across planes crosses only when the face planes' common
+   * line enters both apex wedges on the same ray. */
+  function sharedFacetContact(mesh, u, w, shared) {
+    if (shared.length >= 3) return false;
+    var i, a, b, cId, dId;
+    if (shared.length === 2) {
+      a = mesh.vertices[shared[0]]; b = mesh.vertices[shared[1]];
+      for (i = 0; i < 3; i++) {
+        if (u[i] !== shared[0] && u[i] !== shared[1]) cId = u[i];
+        if (w[i] !== shared[0] && w[i] !== shared[1]) dId = w[i];
+      }
+      var c = mesh.vertices[cId], d = mesh.vertices[dId];
+      var e = sub3(b, a), n = cross3(e, sub3(c, a));
+      var nl = length3(n);
+      var span = Math.max(length3(e), length3(sub3(c, a)), length3(sub3(c, b)),
+                          length3(sub3(d, a)), length3(sub3(d, b)));
+      if (nl === 0 || span === 0 ||
+          Math.abs(dot3(sub3(d, a), n)) > 1e-9 * nl * span) return false;
+      /* Coplanar on a shared edge: the facets fold over each other only
+       * on the same side of the hinge; opposite sides meet on the edge
+       * alone. The apex of u always sits on the positive side by build. */
+      return dot3(cross3(e, sub3(d, a)), n) > 0;
+    }
+    var A = mesh.vertices[shared[0]];
+    var e1 = [], e2 = [];
+    for (i = 0; i < 3; i++) {
+      if (u[i] !== shared[0]) e1.push(sub3(mesh.vertices[u[i]], A));
+      if (w[i] !== shared[0]) e2.push(sub3(mesh.vertices[w[i]], A));
+    }
+    var n1 = cross3(e1[0], e1[1]), n2 = cross3(e2[0], e2[1]);
+    var l = cross3(n1, n2);
+    if (length3(l) <= 1e-9 * length3(n1) * length3(n2)) {
+      return vertexWedgeOverlap2D(e1, e2, n1);
+    }
+    var s1 = wedgeRaySign(e1[0], e1[1], n1, l);
+    var s2 = wedgeRaySign(e2[0], e2[1], n2, l);
+    return s1 !== 0 && s1 === s2;
+  }
+
+  /* Facet pairs of one shell that share no vertex index go through the
+   * ordinary contact test; pairs that share vertices go through the
+   * beyond-contact test above so genuine neighbours stay ignored. */
+  function selfFacetContact(mesh, t1, t2) {
+    var u = mesh.triangles[t1], w = mesh.triangles[t2];
+    var shared = [];
+    for (var i = 0; i < 3; i++) {
+      for (var j = 0; j < 3; j++) {
+        if (u[i] === w[j]) { shared.push(u[i]); break; }
+      }
+    }
+    if (!shared.length) {
+      return triTriHit(mesh.vertices[u[0]], mesh.vertices[u[1]], mesh.vertices[u[2]],
+                       mesh.vertices[w[0]], mesh.vertices[w[1]], mesh.vertices[w[2]]);
+    }
+    return sharedFacetContact(mesh, u, w, shared);
+  }
+
   /* Per-component verdicts the aggregate checks cannot see. Every pair of
    * components is classified once: intersecting shells are not a valid
    * disjoint pair, and for non-touching pairs containment is proved
@@ -1952,6 +2107,40 @@
       var a = mesh.vertices[ids[0]], b = mesh.vertices[ids[1]], c = mesh.vertices[ids[2]];
       return [Math.max(a[0], b[0], c[0]), Math.max(a[1], b[1], c[1]), Math.max(a[2], b[2], c[2])];
     });
+    /* A shell must not cross itself either: sweep each component's own
+     * facets and test only pairs whose boxes overlap. The sweep runs on
+     * the axis where the component spans the most, so a flat sheet does
+     * not collapse into an all-pairs scan. Neighbouring facets that share
+     * vertex indices still go through the exact beyond-contact test, so a
+     * folded flap is caught while a plain shared edge or vertex stays
+     * ignored. */
+    for (var i = 0; i < details.length; i++) {
+      var comp = details[i];
+      var ax = 0;
+      for (var axc = 1; axc < 3; axc++) {
+        if (comp.hi[axc] - comp.lo[axc] > comp.hi[ax] - comp.lo[ax]) ax = axc;
+      }
+      var o1 = (ax + 1) % 3, o2 = (ax + 2) % 3;
+      var order = comp.triangles.slice().sort(function (a, b) { return triLo[a][ax] - triLo[b][ax]; });
+      var selfHit = false;
+      for (var x = 0; x < order.length && !selfHit; x++) {
+        var t1 = order[x], lo1 = triLo[t1], hi1 = triHi[t1];
+        for (var y = x + 1; y < order.length; y++) {
+          var t2 = order[y], lo2 = triLo[t2], hi2 = triHi[t2];
+          if (lo2[ax] > hi1[ax] + 1e-9) break;
+          if (lo1[o1] > hi2[o1] + 1e-9 || lo2[o1] > hi1[o1] + 1e-9 ||
+              lo1[o2] > hi2[o2] + 1e-9 || lo2[o2] > hi1[o2] + 1e-9) continue;
+          if (selfFacetContact(mesh, t1, t2)) {
+            selfHit = true;
+            break;
+          }
+        }
+      }
+      if (selfHit) {
+        findings.push('Surface component ' + (i + 1) +
+          ' intersects itself: a shell cannot cross its own surface');
+      }
+    }
     for (var i = 0; i < details.length; i++) {
       for (var j = i + 1; j < details.length; j++) {
         var A = details[i], B = details[j];
