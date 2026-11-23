@@ -174,6 +174,39 @@ input[type="number"], input[type="text"], select { width: 100%; min-width: 0; he
 .toast { position: fixed; z-index: 15; left: 50%; bottom: 22px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 28px); padding: 12px 18px; background: var(--ink); color: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 6px 24px #0002; font-size: 12px; }
 .footer { padding: 18px clamp(18px, 3vw, 40px) 28px; border-top: 1px solid var(--line); color: var(--ink-soft); font: 12px/1.6 var(--mono); }
 .footer p { margin: 4px 0; }
+.panel-lab { grid-column: 1 / -1; }
+.lab-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 10px 14px; align-items: end; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.lab-controls .mini { font-weight: 650; color: var(--ink-soft); }
+.lab-controls select, .lab-controls input { margin-top: 4px; }
+.lab-verdict { margin: 10px 0 4px; padding: 8px 10px; border-radius: 7px; background: var(--panel-alt); color: var(--ink); font: 12px/1.55 var(--mono); overflow-wrap: anywhere; }
+.lab-table-wrap { overflow-x: auto; margin-top: 6px; }
+.lab-table { min-width: 640px; }
+.lab-table tbody tr { cursor: pointer; }
+.lab-table tbody tr:hover { background: var(--accent-soft); }
+.lab-table tbody tr.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.lab-table tbody tr.best td:first-child { font-weight: 700; color: var(--good); }
+.lab-table .tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--good); border-radius: 4px; color: var(--good); font: 10px var(--mono); }
+.lab-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 14px; }
+.lab-chart { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-alt); min-width: 0; }
+.lab-chart figcaption { color: var(--ink-soft); font-size: 11px; font-weight: 650; margin-bottom: 8px; }
+.mfg-chart svg { display: block; width: 100%; height: auto; }
+.mfg-chart text { fill: var(--ink-soft); font: 10px var(--mono); }
+.mfg-chart .axis { stroke: var(--line-strong); stroke-width: 1; }
+.mfg-chart .chart-bar { fill: var(--voxel-a); }
+.mfg-chart .chart-pt { fill: var(--accent); }
+.mfg-chart .chart-pt-warn { fill: var(--legend-floating); }
+.mfg-chart .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+.mfg-chart .chart-sel { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
+.mfg-chart [tabindex] { cursor: pointer; }
+.mfg-chart [tabindex]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mfg-chart [tabindex]:focus .chart-bar, .mfg-chart .chart-hot:hover .chart-bar { fill: var(--accent); }
+#lab-layer-readout { display: block; margin-top: 8px; color: var(--ink-soft); font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
+.lab-digest { margin: 4px 0 10px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel-alt); color: var(--ink); font: 11px/1.6 var(--mono); overflow-wrap: anywhere; }
+.lab-export-bar { margin-bottom: 6px; }
+.lab-selftest-list { margin: 10px 0 0; padding-left: 22px; font: 11px/1.7 var(--mono); color: var(--ink-soft); }
+.lab-selftest-list li::marker { color: var(--line-strong); }
+.lab-selftest-list .pass { color: var(--good); }
+.lab-selftest-list .fail { color: var(--warn); }
 @media (max-width: 1280px) {
   .workspace { grid-template-columns: 250px minmax(0, 1fr); }
   .panel-output { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 30px; }
@@ -196,6 +229,9 @@ input[type="number"], input[type="text"], select { width: 100%; min-width: 0; he
   .showcase-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .preset-card { min-height: 85px; }
   .art-statement-body { grid-template-columns: minmax(0, 1fr); }
+  .lab-charts { grid-template-columns: minmax(0, 1fr); }
+  .lab-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lab-controls .btn { grid-column: 1 / -1; }
   .topbar-actions { gap: 6px; }
   .offline-badge { display: none; }
   #viewport { height: 500px; }
@@ -245,6 +281,9 @@ input[type="number"], input[type="text"], select { width: 100%; min-width: 0; he
   .voxel-inspector { grid-template-columns: 1fr; padding-top: 9px; margin-top: 9px; }
   .voxel-inspector .btn { width: 100%; }
   .diagnostics-details:not([open]) .diag-table { display: none; }
+  .lab-controls { grid-template-columns: minmax(0, 1fr); }
+  .lab-verdict { font-size: 11px; }
+  .lab-digest { font-size: 10px; }
   .shortcut-grid { grid-template-columns: 110px 1fr; gap: 8px; }
   .help-panel { margin: 0 12px 12px; padding: 14px; }
   #viewport { height: 360px; }

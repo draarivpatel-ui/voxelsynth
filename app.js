@@ -3,6 +3,7 @@
   'use strict';
 
   var V = window.VoxelSynth;
+  var M = window.VoxelSynthMfg;
   var $ = function (id) { return document.getElementById(id); };
   var canvas = $('viewport');
   var ctx = canvas.getContext('2d');
@@ -29,7 +30,9 @@
     artMode: false, turntable: false, turntableTimer: null, lighting: false,
     sliceAxis: 'z', printCheck: false, printStats: null, floatingSet: null, overhangSet: null, thinSet: null,
     symmetry: 'off', gallery: false, galleryPaused: false, galleryTimer: null, galleryOwnsTurntable: false, occBounds: null,
-    shortcuts: true
+    shortcuts: true,
+    labActive: false, labMaterial: 'PLA', labLayerMm: 0.20, labOrientation: '+z', labLayerSel: 0,
+    labReport: null, labBundle: null, labProfile: null, labSelfTests: null
   };
 
   var SCULPTURE_INFO = {
@@ -636,6 +639,7 @@
     updateArtPlate();
     updateTourCaption();
     updateHistoryButtons();
+    updateLab();
   }
 
   function updateDiagnostics() {
@@ -1555,6 +1559,333 @@
     changeGrid(function () { return next; }, 'Project restored with exact cell occupancy.');
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Manufacturing and 6-orientation lab                               */
+  /* ---------------------------------------------------------------- */
+
+  function labOptions() {
+    return {
+      material: state.labMaterial,
+      layerMm: state.labLayerMm,
+      infillPercent: state.infillPercent,
+      orientation: state.labOrientation
+    };
+  }
+
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  function svgNode(tag, attrs) {
+    var el = document.createElementNS ? document.createElementNS(SVG_NS, tag) : document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (name) { el.setAttribute(name, attrs[name]); });
+    return el;
+  }
+
+  function svgLabel(x, y, text, anchor) {
+    var node = svgNode('text', { x: x, y: y });
+    if (anchor) node.setAttribute('text-anchor', anchor);
+    node.textContent = text;
+    return node;
+  }
+
+  function focusableChartGroup(attrs, select) {
+    var g = svgNode('g', attrs);
+    g.addEventListener('click', protectedAction(select));
+    g.addEventListener('keydown', protectedAction(function (event) {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); }
+    }));
+    return g;
+  }
+
+  function selectLabOrientation(orientation) {
+    if (state.labOrientation === orientation) return;
+    state.labOrientation = orientation;
+    updateLab();
+    announce('Orientation ' + orientation + ' drives the layer profile and the audit brief.');
+  }
+
+  function updateLayerReadout() {
+    var profile = state.labProfile;
+    if (!profile || !profile.layers[state.labLayerSel]) {
+      $('lab-layer-readout').textContent = 'Select a layer point for its cross-section readout.';
+      return;
+    }
+    var l = profile.layers[state.labLayerSel];
+    $('lab-layer-readout').textContent = 'Layer ' + (l.z + 1) + ' / ' + profile.layers.length + ' in ' + state.labOrientation +
+      ': ' + fmt(l.cells, 0) + ' solid cells (' + fmt(l.areaMm2, 1) + ' mm2), ' + fmt(l.overhangCells, 0) +
+      ' overhang, ' + fmt(l.supportCells, 0) + ' support-column cells.';
+  }
+
+  function selectLabLayer(z) {
+    state.labLayerSel = z;
+    updateLayerReadout();
+    if (state.labProfile) drawLayerChart(state.labProfile);
+  }
+
+  function drawOrientationChart(report) {
+    var host = $('lab-chart-orient');
+    host.textContent = '';
+    var W = 560, H = 190, padL = 52, padR = 16, padT = 26, padB = 30;
+    var plotW = W - padL - padR, plotH = H - padT - padB, bottom = padT + plotH;
+    var svg = svgNode('svg', {
+      viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+      'aria-label': 'Support volume bars and build height points for the six build orientations'
+    });
+    var maxSupport = Math.max.apply(null, report.rows.map(function (r) { return r.supportMm3; }).concat([0.001]));
+    var maxHeight = Math.max.apply(null, report.rows.map(function (r) { return r.buildHeightMm; }).concat([0.001]));
+    var slot = plotW / report.rows.length;
+    svg.appendChild(svgLabel(4, 14, 'bars: support mm3 / points: build height mm', null));
+    svg.appendChild(svgNode('line', { x1: padL, y1: bottom, x2: W - padR, y2: bottom, 'class': 'axis' }));
+    var points = [];
+    report.rows.forEach(function (row, i) {
+      var cx = padL + slot * i + slot / 2;
+      var bw = Math.min(slot * 0.56, 44);
+      var bh = row.supportMm3 / maxSupport * plotH;
+      var g = focusableChartGroup({
+        'class': 'chart-hot', tabindex: '0', 'data-chart-orient': row.orientation, role: 'button',
+        'aria-label': 'Orientation ' + row.label + ', support ' + fmt(row.supportMm3, 1) + ' mm3, ' +
+          fmt(row.overhangCells, 0) + ' overhang cells, height ' + fmt(row.buildHeightMm, 1) + ' mm'
+      }, function () { selectLabOrientation(row.orientation); });
+      g.appendChild(svgNode('rect', { 'class': 'chart-bar', x: cx - bw / 2, y: bottom - bh, width: bw, height: Math.max(0.5, bh) }));
+      g.appendChild(svgLabel(cx, bottom - bh - 5, fmt(row.supportMm3, 0), 'middle'));
+      g.appendChild(svgLabel(cx, bottom + 15, row.orientation, 'middle'));
+      svg.appendChild(g);
+      points.push([cx, bottom - (row.buildHeightMm / maxHeight) * plotH]);
+    });
+    svg.appendChild(svgNode('path', {
+      'class': 'chart-line',
+      d: 'M' + points.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' L')
+    }));
+    points.forEach(function (p, i) {
+      var row = report.rows[i];
+      var c = svgNode('circle', {
+        'class': 'chart-pt', cx: p[0], cy: p[1], r: 4, tabindex: '0', 'data-chart-orient': row.orientation,
+        role: 'button', 'aria-label': row.label + ' build height ' + fmt(row.buildHeightMm, 1) + ' mm'
+      });
+      c.addEventListener('click', protectedAction(function () { selectLabOrientation(row.orientation); }));
+      c.addEventListener('keydown', protectedAction(function (event) {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectLabOrientation(row.orientation); }
+      }));
+      svg.appendChild(c);
+    });
+    var selRow = report.rows.filter(function (r) { return r.orientation === state.labOrientation; })[0];
+    if (selRow) {
+      var sx = padL + slot * report.rows.indexOf(selRow) + slot / 2;
+      svg.appendChild(svgNode('rect', { 'class': 'chart-sel', x: sx - slot / 2 + 2, y: padT - 8, width: slot - 4, height: plotH + 12 }));
+    }
+    host.appendChild(svg);
+  }
+
+  function drawLayerChart(profile) {
+    var host = $('lab-chart-layer');
+    host.textContent = '';
+    var layers = profile.layers;
+    var W = 560, H = 170, padL = 52, padR = 16, padT = 26, padB = 30;
+    var plotW = W - padL - padR, plotH = H - padT - padB, bottom = padT + plotH;
+    var svg = svgNode('svg', {
+      viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+      'aria-label': 'Solid area bars and overhang points per build layer in ' + profile.orientation
+    });
+    var maxCells = Math.max.apply(null, layers.map(function (l) { return l.cells; }).concat([1]));
+    var slot = plotW / Math.max(1, layers.length);
+    var every = Math.max(1, Math.ceil(layers.length / 8));
+    svg.appendChild(svgLabel(4, 14, 'bars: solid cells / points: red means overhang cells', null));
+    svg.appendChild(svgNode('line', { x1: padL, y1: bottom, x2: W - padR, y2: bottom, 'class': 'axis' }));
+    layers.forEach(function (l) {
+      var x0 = padL + slot * l.z;
+      var bh = l.cells / maxCells * plotH;
+      var g = focusableChartGroup({
+        'class': 'chart-hot', tabindex: '0', 'data-layer': l.z, role: 'button',
+        'aria-label': 'Layer ' + (l.z + 1) + ' of ' + layers.length + ', ' + fmt(l.cells, 0) +
+          ' cells, ' + l.overhangCells + ' overhang, ' + l.supportCells + ' support'
+      }, function () { selectLabLayer(l.z); });
+      g.appendChild(svgNode('rect', { 'class': 'chart-bar', x: x0 + slot * 0.12, y: bottom - bh, width: Math.max(0.6, slot * 0.76), height: Math.max(0.5, bh) }));
+      g.appendChild(svgNode('circle', {
+        'class': l.overhangCells > 0 ? 'chart-pt-warn' : 'chart-pt',
+        cx: x0 + slot / 2, cy: Math.max(padT - 4, bottom - bh - 7), r: l.overhangCells > 0 ? 3.6 : 2.4
+      }));
+      if (l.z % every === 0) g.appendChild(svgLabel(x0 + slot / 2, bottom + 14, String(l.z + 1), 'middle'));
+      svg.appendChild(g);
+    });
+    var sel = layers[state.labLayerSel];
+    if (sel) {
+      var sx = padL + slot * sel.z;
+      var sh = sel.cells / maxCells * plotH;
+      svg.appendChild(svgNode('rect', { 'class': 'chart-sel', x: sx + slot * 0.06, y: bottom - sh - 13, width: slot * 0.88, height: sh + 15 }));
+    }
+    host.appendChild(svg);
+  }
+
+  /* The comparator table, both SVG charts, the digest line and the
+   * audited brief all recompute from the live lattice on every edit. */
+  function updateLab() {
+    if (!state.labActive) return;
+    var opts = labOptions();
+    state.labReport = M.compareOrientations(state.grid, opts);
+    state.labBundle = M.auditBundle(state.grid, opts);
+    var report = state.labReport, best = report.best;
+    $('lab-verdict').textContent = 'Optimal build orientation ' + best.label + ': ' +
+      fmt(best.supportMm3, 1) + ' mm3 support columns, ' + fmt(best.overhangCells, 0) +
+      ' overhang cells, ' + fmt(best.floatingClusters, 0) + ' floating clusters, ' +
+      fmt(best.printMinutes, 1) + ' min estimated.';
+    var body = $('lab-orient-body');
+    body.textContent = '';
+    report.rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      tr.setAttribute('data-orient', row.orientation);
+      tr.setAttribute('tabindex', '0');
+      tr.setAttribute('aria-pressed', String(row.orientation === state.labOrientation));
+      if (row.orientation === state.labOrientation) tr.classList.add('selected');
+      if (row.orientation === best.orientation) tr.classList.add('best');
+      var values = [
+        row.label + (row.orientation === best.orientation ? ' optimal' : ''),
+        fmt(row.footprintMm2, 0), fmt(row.overhangCells, 0), fmt(row.floatingClusters, 0),
+        fmt(row.supportMm3, 1), fmt(row.buildHeightMm, 1), fmt(row.layers, 0),
+        fmt(row.massG, 2), fmt(row.printMinutes, 1)
+      ];
+      values.forEach(function (value) {
+        var td = document.createElement('td');
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+      tr.addEventListener('click', protectedAction(function () { selectLabOrientation(row.orientation); }));
+      tr.addEventListener('keydown', protectedAction(function (event) {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectLabOrientation(row.orientation); }
+      }));
+      body.appendChild(tr);
+    });
+    $('lab-digest').textContent = 'SHA-256 ' + state.labBundle.digest;
+    var labInfill = $('lab-infill');
+    if (document.activeElement !== labInfill) labInfill.value = String(state.infillPercent);
+    $('lab-material').value = state.labMaterial;
+    $('lab-layer').value = String(state.labLayerMm);
+    drawOrientationChart(report);
+    var profile = M.layerProfile(state.grid, state.labOrientation);
+    state.labProfile = profile;
+    state.labLayerSel = Math.max(0, Math.min(profile.layers.length - 1, state.labLayerSel));
+    drawLayerChart(profile);
+    updateLayerReadout();
+  }
+
+  function applyOptimalOrientation() {
+    var best = state.labReport && state.labReport.best;
+    if (!best) return;
+    if (best.orientation === '+z') {
+      showToast('Already in the optimal build orientation (+Z upright).');
+      return;
+    }
+    var label = best.label;
+    changeGrid(function (grid) { return M.orientGrid(grid, best.orientation); },
+      'Applied ' + label + ': the lattice rotated rigidly onto its low-support face.');
+    state.labOrientation = '+z';
+    updateLab();
+  }
+
+  function labDownload(kind) {
+    var bundle = state.labBundle || M.auditBundle(state.grid, labOptions());
+    var formats = {
+      json: { text: bundle.json, ext: 'json', mime: 'application/json' },
+      csv: { text: bundle.csv, ext: 'csv', mime: 'text/csv' },
+      md: { text: bundle.markdown, ext: 'md', mime: 'text/markdown' }
+    };
+    var entry = formats[kind];
+    if (!entry) throw new RangeError('Unknown brief format');
+    downloadBlob(new Blob([entry.text], { type: entry.mime }), safeName() + '.manufacturing.' + entry.ext);
+    showToast('Manufacturing brief ' + entry.ext.toUpperCase() + ' downloaded. SHA-256 ' + bundle.digest.slice(0, 16) + '...');
+  }
+
+  function shareHash() {
+    return M.encodeShareState({
+      grid: state.grid,
+      presetName: state.presetName,
+      orientation: state.labOrientation,
+      material: state.labMaterial,
+      layerMm: state.labLayerMm,
+      infillPercent: state.infillPercent
+    });
+  }
+
+  function shareUrl() {
+    var base = typeof location === 'object' && location && typeof location.href === 'string' && location.href
+      ? location.href.split('#')[0]
+      : 'https://aariv.me/voxelsynth/';
+    return base + shareHash();
+  }
+
+  function copyShareLink() {
+    var url = shareUrl();
+    var done = function () { showToast('Share link copied (' + url.length + ' characters).'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(url).then(done, function () { legacyCopy(url, done); });
+    }
+    legacyCopy(url, done);
+  }
+
+  function labVerify() {
+    var check = M.verifyBundle(state.labBundle);
+    var el = $('lab-status');
+    el.className = 'verification-result' + (check.ok ? ' good' : ' bad');
+    el.textContent = check.ok
+      ? 'Verified intact: recomputed ' + check.actual.slice(0, 24) + '... equals the stamped digest on this page, the JSON brief, the CSV header and the Markdown footer.'
+      : 'Verification FAILED: recomputed ' + check.actual.slice(0, 24) + '... does not match stamped ' + check.expected.slice(0, 24) + '...';
+    announce('Digest ' + (check.ok ? 'verified intact.' : 'verification failed.'));
+  }
+
+  function labTamper() {
+    var demo = M.tamperDemo(state.labBundle);
+    var el = $('lab-status');
+    el.className = 'verification-result' + (demo.detected ? ' good' : ' bad');
+    el.textContent = demo.detected
+      ? 'Tamper detected: ' + demo.changedField + ' was mutated in a throwaway copy and verification now reports ' + demo.actual.slice(0, 24) + '... against stamped ' + demo.expected.slice(0, 24) + '...'
+      : 'Tamper demo failed: the digest did not flag a mutated payload.';
+    announce('Tamper demo ' + (demo.detected ? 'flagged the edit.' : 'missed the edit.'));
+  }
+
+  function labSelfTest() {
+    var run = M.runSelfTests(state.grid);
+    state.labSelfTests = run;
+    var el = $('lab-selftest-result');
+    el.className = 'verification-result' + (run.passed === run.total ? ' good' : ' bad');
+    el.textContent = run.passed + ' / ' + run.total + ' manufacturing self-tests passing.';
+    var list = $('lab-selftest-list');
+    list.textContent = '';
+    run.results.forEach(function (r) {
+      var li = document.createElement('li');
+      li.className = r.pass ? 'pass' : 'fail';
+      li.textContent = (r.pass ? 'PASS ' : 'FAIL ') + r.name + (r.detail ? ' (' + r.detail + ')' : '');
+      list.appendChild(li);
+    });
+    announce(run.passed + ' of ' + run.total + ' manufacturing self-tests passing.');
+  }
+
+  function readShareHash() {
+    try {
+      return typeof location === 'object' && location && typeof location.hash === 'string' ? location.hash : '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  /* A decoded share state rebuilds the lattice deterministically, then
+   * restores the lab selections. Any decode or size failure keeps the
+   * current workspace (fail closed). */
+  function applyShareHash(hash) {
+    var decoded = M.decodeShareHash(hash);
+    var grid = editorGrid(M.shareGrid(decoded));
+    state.labMaterial = decoded.m;
+    state.labLayerMm = decoded.l;
+    state.labOrientation = decoded.o;
+    state.infillPercent = decoded.i;
+    $('infill').value = String(decoded.i);
+    $('lab-material').value = decoded.m;
+    $('lab-layer').value = String(decoded.l);
+    changeGrid(function () { return grid; }, 'Workspace restored from share link.', decoded.n);
+    state.presetName = decoded.n;
+    /* Identical occupancy skips recompute inside changeGrid; the mesh must
+     * still be re-extracted so stats reflect the restored infill. */
+    if (state.mesh.stats.infillPercent !== state.infillPercent) recompute();
+    setArtMode(decoded.k === 'sculpture');
+    updateLab();
+  }
+
   function bindEvents() {
     on('art-mode-toggle', 'click', function () { setArtMode(!state.artMode); });
     on('turntable-toggle', 'click', toggleTurntable);
@@ -1675,6 +2006,37 @@
       var files = event.dataTransfer && event.dataTransfer.files;
       return auditFileObject(files && files[0]);
     });
+    if (state.labActive) {
+      on('lab-material', 'change', function () {
+        var material = $('lab-material').value;
+        if (!Object.prototype.hasOwnProperty.call(M.MATERIALS, material)) {
+          $('lab-material').value = state.labMaterial;
+          throw new RangeError('Unknown material. Choose PLA, PETG, ABS or TPU.');
+        }
+        state.labMaterial = material; updateLab();
+      });
+      on('lab-layer', 'change', function () {
+        var layerMm = Number($('lab-layer').value);
+        if (!Number.isFinite(layerMm) || M.LAYER_HEIGHTS_MM.indexOf(layerMm) === -1) {
+          $('lab-layer').value = String(state.labLayerMm);
+          throw new RangeError('Layer height must be one of 0.12, 0.20 or 0.28 mm.');
+        }
+        state.labLayerMm = layerMm; updateLab();
+      });
+      on('lab-infill', 'input', function () {
+        state.infillPercent = Math.max(0, Math.min(100, numberInput('lab-infill')));
+        $('infill').value = String(state.infillPercent);
+        recompute();
+      });
+      on('lab-apply-optimal', 'click', applyOptimalOrientation);
+      on('lab-export-json', 'click', function () { labDownload('json'); });
+      on('lab-export-csv', 'click', function () { labDownload('csv'); });
+      on('lab-export-md', 'click', function () { labDownload('md'); });
+      on('lab-copy-link', 'click', copyShareLink);
+      on('lab-verify', 'click', labVerify);
+      on('lab-tamper', 'click', labTamper);
+      on('lab-selftest', 'click', labSelfTest);
+    }
 
     var drag = null;
     on('viewport', 'pointerdown', function (event) {
@@ -1801,6 +2163,8 @@
       stored = localStorage.getItem('voxelsynth-theme') || 'light';
       storedShortcuts = localStorage.getItem('voxelsynth-shortcuts') || 'on';
     } catch (error) { /* Local storage is optional. */ }
+    state.labActive = !!(M && $('mfg-panel'));
+    if (!state.labActive && $('mfg-panel')) $('mfg-panel').hidden = true;
     state.grid = V.loadPreset('deskOrganizer');
     state.slice = Math.floor(state.grid.nz / 2); state.selected[2] = state.slice;
     state.theme = stored === 'dark' ? 'dark' : 'light';
@@ -1811,6 +2175,14 @@
      * summary so controls stay within reach; the full table remains one tap. */
     if (window.innerWidth <= 540) document.querySelectorAll('.diagnostics-details').forEach(function (details) { details.open = false; });
     syncLatticeInputs(); bindEvents(); recompute(); setArtMode(false);
+    if (state.labActive) {
+      var hash = readShareHash();
+      if (hash.indexOf(M.SHARE_PREFIX) === 0) {
+        try {
+          applyShareHash(hash);
+        } catch (error) { /* A malformed or hostile share hash keeps the default workspace. */ }
+      }
+    }
     window.VoxelSynthStudio = {
       snapshot: function () { return V.serializeGrid(state.grid); },
       importText: importText,
@@ -1827,7 +2199,24 @@
           printable: state.printStats.printable, overhangCells: state.printStats.overhangCells,
           floatingClusters: state.printStats.floatingClusters, thinWallCells: state.printStats.thinWallCells,
           solidComponents: state.printStats.solidComponents
-        } : null }; }
+        } : null }; },
+      shareHash: function () { return state.labActive ? shareHash() : null; },
+      applyShareHash: function (hash) { if (state.labActive) applyShareHash(hash); },
+      lab: function () {
+        return state.labActive ? {
+          active: true,
+          material: state.labMaterial, layerMm: state.labLayerMm, orientation: state.labOrientation,
+          layerSel: state.labLayerSel,
+          best: state.labReport ? state.labReport.best.orientation : null,
+          digest: state.labBundle ? state.labBundle.digest : null,
+          rows: state.labReport ? state.labReport.rows.map(function (row) {
+            return { orientation: row.orientation, solidCells: row.solidCells, bedCells: row.bedCells,
+              overhangCells: row.overhangCells, floatingClusters: row.floatingClusters,
+              supportMm3: row.supportMm3, layers: row.layers, massG: row.massG, printMinutes: row.printMinutes };
+          }) : [],
+          selfTests: state.labSelfTests ? { passed: state.labSelfTests.passed, total: state.labSelfTests.total } : null
+        } : { active: false };
+      }
     };
   }
 

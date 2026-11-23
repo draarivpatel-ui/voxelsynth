@@ -4,11 +4,12 @@
   "description": "Local voxel and signed distance field CAD studio with counted mesh topology, six verified STL, OBJ, PLY, OpenSCAD and VOX round trips, a binary glTF export and a SHA-256 bound export auditor",
   "main": "voxel.js",
   "scripts": {
-    "test": "node --test --test-reporter=spec test.js export-test.js integrity-test.js ui-test.js",
+    "test": "node --test --test-reporter=spec test.js export-test.js integrity-test.js ui-test.js mfg-test.js",
     "test:core": "node --test --test-reporter=spec test.js",
     "test:exports": "node --test --test-reporter=spec export-test.js",
     "test:integrity": "node --test --test-reporter=spec integrity-test.js",
-    "test:ui": "node --test --test-reporter=spec ui-test.js"
+    "test:ui": "node --test --test-reporter=spec ui-test.js",
+    "test:mfg": "node --test --test-reporter=spec mfg-test.js"
   },
   "keywords": [
     "voxel",

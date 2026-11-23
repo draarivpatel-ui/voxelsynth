@@ -114,11 +114,49 @@
     <details class="diagnostics-details" open><summary>Mesh diagnostics</summary><table class="diag-table"><caption class="sr-only">Current mesh topology, geometry and material estimate</caption><thead><tr><th scope="col">Parameter</th><th scope="col">Readout</th></tr></thead><tbody id="diag-body"></tbody></table></details>
     <div class="export-section"><h3 class="subhead">Round-trip verification</h3><p class="field-note">Reparse all four mesh formats, compare every vertex and volume, then reconstruct OpenSCAD, VOX and project occupancy in six verified round trips.</p><button id="verify-exports" class="btn btn-primary btn-block" type="button">Verify all 6 export formats</button><div id="verification-result" class="verification-result" role="status">Run a self-check for the current geometry.</div><h3 class="subhead">Take your part</h3><label class="mini" for="export-name">File and solid name</label><input id="export-name" class="wide-input" type="text" value="voxelsynth_model" maxlength="80" spellcheck="false"><div class="export-grid"><button class="btn" data-export="ascii-stl" type="button">ASCII STL</button><button class="btn" data-export="binary-stl" type="button">Binary STL</button><button class="btn" data-export="obj" type="button">OBJ</button><button class="btn" data-export="ply" type="button">Binary PLY</button><button class="btn" data-export="scad" type="button">OpenSCAD</button><button class="btn" data-export="vox" type="button">MagicaVoxel VOX</button></div><p class="field-note">Millimeter coordinates. Nonempty manifold geometry is required for part export. Point and edge contacts are reported.</p><h3 class="subhead">Editable project</h3><div class="row"><button class="btn" data-export="json" type="button">Save project</button><button id="open-project" class="btn" type="button">Open project</button><input id="import-project" type="file" accept=".json,application/json" hidden></div><details class="control-details"><summary>Copy export text</summary><div class="export-grid"><button class="btn" data-copy="ascii-stl" type="button">Copy STL</button><button class="btn" data-copy="obj" type="button">Copy OBJ</button><button class="btn" data-copy="scad" type="button">Copy SCAD</button><button class="btn" data-copy="json" type="button">Copy project</button></div></details><h3 class="subhead">Audit any exported file</h3><p class="field-note">Drop or choose an STL, OBJ, PLY, VOX, binary glTF or project JSON file. An independent reader recounts vertices, edges and faces, re-proves the Euler characteristic, checks declared normals and the bounding box, then binds the verdict to the file SHA-256 in a downloadable proof report.</p><div id="audit-drop" class="audit-drop"><button id="audit-open" class="btn btn-block" type="button">Audit exported file</button><input id="audit-file" type="file" accept=".stl,.obj,.ply,.vox,.glb,.json" hidden><p class="field-note">Drop a file on this panel. Nothing leaves the page; malformed files are rejected without touching the current part.</p></div><div id="audit-result" class="verification-result audit-result" role="status">No file audited yet.</div><div class="row"><button class="btn" data-export="glb" type="button">Binary glTF</button><button id="audit-report" class="btn" type="button" disabled>Download proof report</button></div></div>
   </section>
+  <section id="mfg-panel" class="panel panel-lab" aria-labelledby="lab-heading">
+    <div class="panel-head"><h2 id="lab-heading" class="panel-title">Manufacturing and 6-orientation lab</h2><span class="unit-tag">MFG</span></div>
+    <div class="lab-controls">
+      <label class="mini">Material<select id="lab-material"><option value="PLA">PLA (1.24 g/cm3)</option><option value="PETG">PETG (1.27 g/cm3)</option><option value="ABS">ABS (1.04 g/cm3)</option><option value="TPU">TPU (1.21 g/cm3)</option></select></label>
+      <label class="mini">Layer height<select id="lab-layer"><option value="0.12">0.12 mm</option><option value="0.2" selected>0.20 mm</option><option value="0.28">0.28 mm</option></select></label>
+      <label class="mini">Infill (%)<input id="lab-infill" type="number" min="0" max="100" step="5" value="100"></label>
+      <button id="lab-apply-optimal" class="btn" type="button">Apply optimal orientation</button>
+    </div>
+    <div id="lab-verdict" class="lab-verdict" role="status">Computing the six build orientations.</div>
+    <div class="lab-table-wrap">
+      <table class="diag-table lab-table">
+        <caption class="sr-only">Six-orientation build-plate comparison for the current lattice</caption>
+        <thead><tr><th scope="col">Orientation</th><th scope="col">Bed mm2</th><th scope="col">Overhang</th><th scope="col">Floating</th><th scope="col">Support mm3</th><th scope="col">Height mm</th><th scope="col">Layers</th><th scope="col">Mass g</th><th scope="col">Time min</th></tr></thead>
+        <tbody id="lab-orient-body"></tbody>
+      </table>
+    </div>
+    <div class="lab-charts">
+      <figure class="lab-chart">
+        <figcaption id="lab-chart-orient-cap">Support volume (bars) and build height (points) by orientation</figcaption>
+        <div id="lab-chart-orient" class="mfg-chart" role="group" aria-label="Support volume and build height by orientation"></div>
+      </figure>
+      <figure class="lab-chart">
+        <figcaption id="lab-chart-layer-cap">Layer-by-layer solid area (bars) and overhang cells (points)</figcaption>
+        <div id="lab-chart-layer" class="mfg-chart" role="group" aria-label="Layer cross-section area profile"></div>
+        <output id="lab-layer-readout" aria-live="polite">Select a layer point for its cross-section readout.</output>
+      </figure>
+    </div>
+    <h3 class="subhead">Audited manufacturing brief</h3>
+    <p class="field-note">Mass, support and time figures are deterministic voxel-geometry estimates, not physical slicer G-code runs.</p>
+    <div id="lab-digest" class="lab-digest">SHA-256 pending.</div>
+    <div class="row wrap lab-export-bar"><button id="lab-export-json" class="btn btn-small" type="button">Brief JSON</button><button id="lab-export-csv" class="btn btn-small" type="button">Brief CSV</button><button id="lab-export-md" class="btn btn-small" type="button">Brief Markdown</button><button id="lab-copy-link" class="btn btn-small" type="button">Copy share link</button><button id="lab-verify" class="btn btn-small" type="button">Verify digest</button><button id="lab-tamper" class="btn btn-small" type="button">Tamper demo</button></div>
+    <div id="lab-status" class="verification-result" role="status">Digest not verified yet.</div>
+    <h3 class="subhead">In-page self-tests</h3>
+    <div class="row"><button id="lab-selftest" class="btn" type="button">Run manufacturing self-tests</button></div>
+    <div id="lab-selftest-result" class="verification-result" role="status">Self-tests have not run yet.</div>
+    <ol id="lab-selftest-list" class="lab-selftest-list"></ol>
+  </section>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <div id="live-announcer" class="sr-only" role="status" aria-live="polite"></div>
 <footer class="footer"><p>Integer lattice / SDF booleans / algorithmic sculpture / counted edge incidences / vertex link cycles / divergence theorem volume</p><p><a href="https://github.com/draarivpatel-ui/voxelsynth">Source and verification suite</a> | No accounts. No uploads. No runtime dependencies.</p></footer>
 <script src="voxel.js"></script>
+<script src="mfg-lab.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

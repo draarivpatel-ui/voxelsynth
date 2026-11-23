@@ -110,6 +110,7 @@ function createWorkspace(options = {}) {
     getElementById: id => ids.get(id) || null,
     querySelectorAll: selector => nodes.filter(node => selector.split(',').some(part => matches(node, part))),
     createElement: tag => new Element(tag),
+    createElementNS: (ns, tag) => new Element(tag),
     addEventListener: (type, handler) => documentEvents.set(type, handler),
     execCommand: command => command === 'copy' && options.legacyCopy !== false
   };
@@ -126,12 +127,15 @@ function createWorkspace(options = {}) {
     setTimeout: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; }, clearTimeout: id => timers.delete(id),
     setInterval: callback => { const id = ++nextTimer; timers.set(id, { callback, delay: 0, interval: true }); return id; }, clearInterval: id => timers.delete(id),
     addEventListener: (type, handler) => windowEvents.set(type, handler),
+    location: options.location === undefined ? { href: 'https://aariv.me/voxelsynth/', hash: '' } : options.location,
+    innerWidth: options.innerWidth === undefined ? 1024 : options.innerWidth,
     devicePixelRatio: options.dpr || 1,
     ResizeObserver: class { constructor(callback) { this.callback = callback; } observe(node) { if (node.tagName !== 'CANVAS') throw new Error('unexpected observed node'); } }
   };
   sandbox.window = sandbox; sandbox.self = sandbox;
   vm.createContext(sandbox);
-  for (const filename of ['voxel.js', 'app.js']) vm.runInContext(fs.readFileSync(__dirname + '/' + filename, 'utf8'), sandbox, { filename, timeout: 10000 });
+  const scripts = options.scripts || ['voxel.js', 'mfg-lab.js', 'app.js'];
+  for (const filename of scripts) vm.runInContext(fs.readFileSync(__dirname + '/' + filename, 'utf8'), sandbox, { filename, timeout: 10000 });
   return {
     window: sandbox, document, context, ids, nodes, downloads, copies, errors, drawCalls, storage, timers, urls,
     studio: sandbox.VoxelSynthStudio,

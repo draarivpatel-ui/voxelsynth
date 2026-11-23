@@ -681,12 +681,12 @@ test('empty project JSON, empty OBJ and empty VOX report EMPTY rather than a geo
   assert.equal(vox.verdict, 'EMPTY');
 });
 
-test('CI and the README both run the unified npm test command covering all four suites', () => {
+test('CI and the README both run the unified npm test command covering all five suites', () => {
   const ci = fs.readFileSync(__dirname + '/.github/workflows/ci.yml', 'utf8');
   assert.match(ci, /npm test/);
   assert.doesNotMatch(ci, /node --test/);
   const pkg = JSON.parse(fs.readFileSync(__dirname + '/package.json', 'utf8'));
-  for (const file of ['test.js', 'export-test.js', 'integrity-test.js', 'ui-test.js']) {
+  for (const file of ['test.js', 'export-test.js', 'integrity-test.js', 'ui-test.js', 'mfg-test.js']) {
     assert.ok(pkg.scripts.test.includes(file), 'npm test misses ' + file);
   }
   const readme = fs.readFileSync(__dirname + '/README.md', 'utf8');
