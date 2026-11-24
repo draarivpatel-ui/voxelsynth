@@ -77,7 +77,7 @@ Node.js is needed only for tests and programmatic use. The browser needs no inst
 npm test
 ```
 
-Current verified result: **566 tests, 566 passed, 0 failed, 0 skipped**. Tests use Node builtins only, and CI runs the same single command.
+Current verified result: **567 tests, 567 passed, 0 failed, 0 skipped**. Tests use Node builtins only, and CI runs the same single command.
 
 | Suite | Command | Verified result |
 | --- | --- | --- |
@@ -175,7 +175,7 @@ Voxel resolution controls dimensional accuracy. Curves are stepped surfaces, six
 | [app.js](app.js) | Renderer, DPI resizing, X/Y/Z slice inspection, printability overlay, recoverable edits, keyboard navigation, sculpture gallery, manufacturing lab wiring and checked export delivery |
 | [mfg-lab.js](mfg-lab.js) | Six-orientation comparator, layer profiles, material and infill estimates, SHA-256 audit briefs (JSON, CSV, Markdown), `#vs=` share codec and in-page self-tests |
 | [index.html](index.html), [style.css](style.css) | Local studio, responsive hierarchy, accessible controls, themes and the sculpture section |
-| [test.js](test.js) | 134 engine tests |
+| [test.js](test.js) | 135 engine tests |
 | [export-test.js](export-test.js) | 47 format and precision tests |
 | [integrity-test.js](integrity-test.js) | 98 export integrity, audit and glTF scene tests |
 | [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 64 UI tests and the strict page contract |

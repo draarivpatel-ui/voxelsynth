@@ -79,6 +79,7 @@
         grid.nx <= 0 || grid.ny <= 0 || grid.nz <= 0 || !ArrayBuffer.isView(grid.data) ||
         Object.prototype.toString.call(grid.data) !== '[object Uint8Array]' ||
         grid.data.length !== grid.nx * grid.ny * grid.nz || grid.data.length > MAX_GRID_CELLS ||
+        Array.prototype.some.call(grid.data, function (value) { return value !== 0 && value !== 1; }) ||
         !Number.isFinite(grid.pitchMm) || grid.pitchMm < 1e-6 || grid.pitchMm > 1e6) {
       throw new TypeError('expected a complete VoxelSynth Uint8Array grid');
     }

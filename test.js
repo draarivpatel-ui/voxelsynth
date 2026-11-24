@@ -575,6 +575,17 @@ test('grid validation rejects malformed buffers and pitches', () => {
   }
 });
 
+test('grid validation rejects nonbinary occupancy even in a correctly sized Uint8Array', () => {
+  const g = V.createGrid(2, 2, 2);
+  g.data[3] = 2;
+  assert.throws(() => V.countVoxels(g), TypeError);
+  assert.throws(() => V.cloneGrid(g), TypeError);
+  g.data[3] = 255;
+  assert.throws(() => V.serializeGrid(g), TypeError);
+  g.data[3] = 1;
+  assert.equal(V.countVoxels(g), 1);
+});
+
 test('fractional and nonfinite coordinates cannot alias another voxel', () => {
   const grid = solidBox(4, 4, 4);
   for (const cell of [[0, 0.5, 0], [0.5, 0, 0], [0, 0, 0.5], [NaN, 0, 0], [Infinity, 0, 0]]) {
