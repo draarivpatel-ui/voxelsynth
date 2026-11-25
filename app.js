@@ -1741,8 +1741,10 @@
         fmt(row.supportMm3, 1), fmt(row.buildHeightMm, 1), fmt(row.layers, 0),
         fmt(row.massG, 2), fmt(row.printMinutes, 1)
       ];
-      values.forEach(function (value) {
+      var labels = ['Orientation', 'Bed mm2', 'Overhang', 'Floating', 'Support mm3', 'Height mm', 'Layers', 'Mass g', 'Time min'];
+      values.forEach(function (value, index) {
         var td = document.createElement('td');
+        if (index) td.setAttribute('data-label', labels[index]);
         td.textContent = value;
         tr.appendChild(td);
       });

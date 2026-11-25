@@ -81,12 +81,12 @@ Current verified result: **567 tests, 567 passed, 0 failed, 0 skipped**. Tests u
 
 | Suite | Command | Verified result |
 | --- | --- | --- |
-| Engine | `node --test test.js` | 134 passed, 0 failed |
+| Engine | `node --test test.js` | 135 passed, 0 failed |
 | File schemas and precision | `node --test export-test.js` | 47 passed, 0 failed |
 | Export integrity and audit | `node --test integrity-test.js` | 98 passed, 0 failed |
 | DOM and interaction | `node --test ui-test.js` | 64 passed, 0 failed |
 | Manufacturing lab | `node --test mfg-test.js` | 223 passed, 0 failed |
-| Full suite | `npm test` | 566 passed, 0 failed |
+| Full suite | `npm test` | 567 passed, 0 failed |
 
 The engine suite checks all 256 occupancy masks of a 2 x 2 x 2 block, exact center-sampling boundaries, singular contacts, cavities, translations, malformed input, live mirrored edits, printability component and wraparound analysis, and a 2,000,000-cell project snapshot. Format tests check complete STL facets, binary length and little endian records, OBJ index bounds, binary PLY element records and float32 collapse guards, VOX chunk structure and occupancy fidelity, balanced OpenSCAD structure, disjoint cuboid coverage and pitches from 0.000001 to 1,000,000 mm, plus full schema round trips for every sculpture preset.
 

@@ -186,6 +186,17 @@ input[type="number"], input[type="text"], select { width: 100%; min-width: 0; he
 .lab-table tbody tr.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .lab-table tbody tr.best td:first-child { font-weight: 700; color: var(--good); }
 .lab-table .tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--good); border-radius: 4px; color: var(--good); font: 10px var(--mono); }
+@media (max-width: 639px) {
+  .lab-table-wrap { overflow-x: visible; }
+  .lab-table { min-width: 0; }
+  .lab-table thead { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .lab-table, .lab-table tbody, .lab-table tr, .lab-table td { display: block; width: 100%; }
+  .lab-table tbody tr { margin: 8px 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .lab-table tbody tr.selected { box-shadow: inset 3px 0 0 var(--accent); }
+  .lab-table td { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 0; text-align: right; white-space: normal; }
+  .lab-table td:first-child { display: block; text-align: left; font-weight: 700; margin-bottom: 3px; }
+  .lab-table td[data-label]::before { content: attr(data-label); color: var(--ink-soft); font-weight: 500; text-align: left; }
+}
 .lab-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 14px; }
 .lab-chart { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-alt); min-width: 0; }
 .lab-chart figcaption { color: var(--ink-soft); font-size: 11px; font-weight: 650; margin-bottom: 8px; }
