@@ -77,16 +77,16 @@ Node.js is needed only for tests and programmatic use. The browser needs no inst
 npm test
 ```
 
-Current verified result: **567 tests, 567 passed, 0 failed, 0 skipped**. Tests use Node builtins only, and CI runs the same single command.
+Current verified result: **568 tests, 568 passed, 0 failed, 0 skipped**. Tests use Node builtins only, and CI runs the same single command.
 
 | Suite | Command | Verified result |
 | --- | --- | --- |
 | Engine | `node --test test.js` | 135 passed, 0 failed |
 | File schemas and precision | `node --test export-test.js` | 47 passed, 0 failed |
 | Export integrity and audit | `node --test integrity-test.js` | 98 passed, 0 failed |
-| DOM and interaction | `node --test ui-test.js` | 64 passed, 0 failed |
+| DOM and interaction | `node --test ui-test.js` | 65 passed, 0 failed |
 | Manufacturing lab | `node --test mfg-test.js` | 223 passed, 0 failed |
-| Full suite | `npm test` | 567 passed, 0 failed |
+| Full suite | `npm test` | 568 passed, 0 failed |
 
 The engine suite checks all 256 occupancy masks of a 2 x 2 x 2 block, exact center-sampling boundaries, singular contacts, cavities, translations, malformed input, live mirrored edits, printability component and wraparound analysis, and a 2,000,000-cell project snapshot. Format tests check complete STL facets, binary length and little endian records, OBJ index bounds, binary PLY element records and float32 collapse guards, VOX chunk structure and occupancy fidelity, balanced OpenSCAD structure, disjoint cuboid coverage and pitches from 0.000001 to 1,000,000 mm, plus full schema round trips for every sculpture preset.
 
@@ -178,7 +178,7 @@ Voxel resolution controls dimensional accuracy. Curves are stepped surfaces, six
 | [test.js](test.js) | 135 engine tests |
 | [export-test.js](export-test.js) | 47 format and precision tests |
 | [integrity-test.js](integrity-test.js) | 98 export integrity, audit and glTF scene tests |
-| [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 64 UI tests and the strict page contract |
+| [ui-test.js](ui-test.js), [dom-harness.js](dom-harness.js) | 65 UI tests and the strict page contract |
 | [mfg-test.js](mfg-test.js) | 223 manufacturing lab, codec, audit and lab UI tests |
 
 MIT. See [LICENSE](LICENSE).

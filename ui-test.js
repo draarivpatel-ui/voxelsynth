@@ -745,3 +745,22 @@ test('light theme long sculpture titles fit inside the plate', async () => {
   assert.equal(new DataView(bytes.buffer).getUint32(20), 1000);
   clean(w);
 });
+
+test('responsive controls, orientation rows, print and canvas inset regressions stay pinned', () => {
+  const css = fs.readFileSync(__dirname + '/style.css', 'utf8');
+  assert.match(css, /--line-strong: #77817a/);
+  assert.match(css, /input\[type="number"\], input\[type="text"\], select \{[^}]*height: 44px/);
+  assert.match(css, /\.btn \{ min-height: 44px/);
+  assert.match(css, /\.btn-small \{ min-height: 44px/);
+  assert.match(css, /\.seg \{ flex: 1; min-height: 44px/);
+  assert.match(css, /button \{ cursor: pointer; min-width: 44px; \}/);
+  assert.match(css, /summary \{ min-height: 44px/);
+  assert.match(css, /\.brand \{ display: flex; align-items: center; min-height: 44px/);
+  assert.match(css, /\.lab-table tbody tr \{ cursor: pointer; height: 44px/);
+  assert.match(css, /@page \{ margin: 12mm; \}/);
+  assert.match(css, /@media print \{\s*button, input, select, textarea \{ display: none !important; \}/);
+  assert.match(css, /#lab-chart-layer svg \{ width: 100%; \}/);
+  const app = fs.readFileSync(__dirname + '/app.js', 'utf8');
+  assert.match(app, /aria-label', 'Select build orientation '/);
+  assert.match(app, /viewportWidth - 28, state\.viewportWidth < 520 \? 190 : 202/);
+});

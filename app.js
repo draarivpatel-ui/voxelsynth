@@ -321,7 +321,7 @@
     var uv = slicePlaneAxes();
     var nU = [g.nx, g.ny, g.nz][uv[0]], nV = [g.nx, g.ny, g.nz][uv[1]];
     var s0 = state.slice;
-    var boxW = state.viewportWidth < 520 ? 154 : 202;
+    var boxW = Math.min(state.viewportWidth - 28, state.viewportWidth < 520 ? 190 : 202);
     var boxH = state.viewportWidth < 520 ? 150 : 180;
     var x0 = state.viewportWidth - boxW - 14;
     var y0 = 14;
@@ -1644,6 +1644,10 @@
         'aria-label': 'Orientation ' + row.label + ', support ' + fmt(row.supportMm3, 1) + ' mm3, ' +
           fmt(row.overhangCells, 0) + ' overhang cells, height ' + fmt(row.buildHeightMm, 1) + ' mm'
       }, function () { selectLabOrientation(row.orientation); });
+      g.appendChild(svgNode('rect', {
+        'class': 'chart-hit', x: cx - slot / 2 + 1, y: padT - 6, width: Math.max(1, slot - 2), height: plotH + 34,
+        fill: 'transparent', 'pointer-events': 'all'
+      }));
       g.appendChild(svgNode('rect', { 'class': 'chart-bar', x: cx - bw / 2, y: bottom - bh, width: bw, height: Math.max(0.5, bh) }));
       g.appendChild(svgLabel(cx, bottom - bh - 5, fmt(row.supportMm3, 0), 'middle'));
       g.appendChild(svgLabel(cx, bottom + 15, row.orientation, 'middle'));
@@ -1657,13 +1661,9 @@
     points.forEach(function (p, i) {
       var row = report.rows[i];
       var c = svgNode('circle', {
-        'class': 'chart-pt', cx: p[0], cy: p[1], r: 4, tabindex: '0', 'data-chart-orient': row.orientation,
-        role: 'button', 'aria-label': row.label + ' build height ' + fmt(row.buildHeightMm, 1) + ' mm'
+        'class': 'chart-pt', cx: p[0], cy: p[1], r: 4, 'data-chart-orient': row.orientation,
+        'pointer-events': 'none', 'aria-hidden': 'true'
       });
-      c.addEventListener('click', protectedAction(function () { selectLabOrientation(row.orientation); }));
-      c.addEventListener('keydown', protectedAction(function (event) {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectLabOrientation(row.orientation); }
-      }));
       svg.appendChild(c);
     });
     var selRow = report.rows.filter(function (r) { return r.orientation === state.labOrientation; })[0];
@@ -1678,10 +1678,12 @@
     var host = $('lab-chart-layer');
     host.textContent = '';
     var layers = profile.layers;
-    var W = 560, H = 170, padL = 52, padR = 16, padT = 26, padB = 30;
+    var H = 170, padL = 52, padR = 16, padT = 26, padB = 30;
+    var minSlot = 48;
+    var W = Math.max(560, padL + padR + layers.length * minSlot);
     var plotW = W - padL - padR, plotH = H - padT - padB, bottom = padT + plotH;
     var svg = svgNode('svg', {
-      viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+      viewBox: '0 0 ' + W + ' ' + H, width: W, height: H, role: 'img',
       'aria-label': 'Solid area bars and overhang points per build layer in ' + profile.orientation
     });
     var maxCells = Math.max.apply(null, layers.map(function (l) { return l.cells; }).concat([1]));
@@ -1697,6 +1699,10 @@
         'aria-label': 'Layer ' + (l.z + 1) + ' of ' + layers.length + ', ' + fmt(l.cells, 0) +
           ' cells, ' + l.overhangCells + ' overhang, ' + l.supportCells + ' support'
       }, function () { selectLabLayer(l.z); });
+      g.appendChild(svgNode('rect', {
+        'class': 'chart-hit', x: x0 + 1, y: padT - 6, width: Math.max(1, slot - 2), height: plotH + 34,
+        fill: 'transparent', 'pointer-events': 'all'
+      }));
       g.appendChild(svgNode('rect', { 'class': 'chart-bar', x: x0 + slot * 0.12, y: bottom - bh, width: Math.max(0.6, slot * 0.76), height: Math.max(0.5, bh) }));
       g.appendChild(svgNode('circle', {
         'class': l.overhangCells > 0 ? 'chart-pt-warn' : 'chart-pt',
@@ -1733,6 +1739,7 @@
       tr.setAttribute('data-orient', row.orientation);
       tr.setAttribute('tabindex', '0');
       tr.setAttribute('aria-pressed', String(row.orientation === state.labOrientation));
+      tr.setAttribute('aria-label', 'Select build orientation ' + row.label);
       if (row.orientation === state.labOrientation) tr.classList.add('selected');
       if (row.orientation === best.orientation) tr.classList.add('best');
       var values = [

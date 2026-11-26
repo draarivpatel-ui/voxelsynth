@@ -884,9 +884,13 @@ test('orientation chart groups are focusable and drive the layer profile', () =>
   const group = svg.children.find(node => node.getAttribute('data-chart-orient') === '-y');
   assert.ok(group);
   assert.equal(group.getAttribute('tabindex'), '0');
+  const hit = group.children.find(node => node.getAttribute('class') === 'chart-hit');
+  assert.ok(hit);
+  assert.ok(Number(hit.getAttribute('height')) >= 44);
   group.dispatch('click');
   assert.equal(w.studio.lab().orientation, '-y');
   const layerSvg = w.get('lab-chart-layer').children[0];
+  assert.ok(Number(layerSvg.getAttribute('width')) >= 560);
   const layerPoint = layerSvg.children.find(node => node.getAttribute('data-layer') === '3');
   assert.ok(layerPoint);
   layerPoint.dispatch('click');
