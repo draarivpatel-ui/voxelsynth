@@ -373,7 +373,8 @@
 
   function csvEscape(value) {
     var s = String(value);
-    if (s.length && (s.charCodeAt(0) < 0x20 || /^[\t ]*[=+\-@]/.test(s))) s = "'" + s;
+    if (s.length && (s.charCodeAt(0) < 0x20 ||
+        (typeof value !== 'number' && /^[\s\p{Cf}\p{Cc}]*[=+\-@\t\r]/u.test(s.normalize('NFKC'))))) s = "'" + s;
     if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
     return s;
   }
@@ -547,7 +548,7 @@
     if (!payload || typeof payload !== 'object' || typeof payload.sha256 !== 'string') {
       throw new TypeError('verify needs a stamped audit payload');
     }
-    var sans = {};
+    var sans = Object.create(null);
     Object.keys(payload).forEach(function (k) { if (k !== 'sha256') sans[k] = payload[k]; });
     var actual = needV().sha256Hex(utf8Bytes(stableStringify(sans)));
     return { ok: actual === payload.sha256, expected: payload.sha256, actual: actual };

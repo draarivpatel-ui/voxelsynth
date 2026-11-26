@@ -423,6 +423,11 @@ test('the stamped payload verifies and a single mutated field fails', () => {
   assert.equal(check.ok, false);
   assert.equal(check.expected, bundle.digest);
   assert.notEqual(check.actual, bundle.digest);
+  const raw = JSON.stringify(bundle.payload).replace('{', '{"__proto__":{"polluted":true},');
+  const hostile = JSON.parse(raw);
+  assert.equal(Object.hasOwn(hostile, '__proto__'), true);
+  assert.equal(M.verifyBundle(hostile).ok, false);
+  assert.equal({}.polluted, undefined);
 });
 
 test('the tamper demo mutates a copy and always gets flagged', () => {
@@ -465,6 +470,11 @@ test('CSV escaping blocks every spreadsheet formula prefix', () => {
   assert.equal(M.csvEscape('-10'), "'-10");
   assert.equal(M.csvEscape('@info'), "'@info");
   assert.equal(M.csvEscape(' =1+1'), "' =1+1");
+  assert.equal(M.csvEscape('\u200B=cmd'), "'\u200B=cmd");
+  assert.equal(M.csvEscape('\u00A0+cmd'), "'\u00A0+cmd");
+  assert.equal(M.csvEscape(' \uFEFF@cmd'), "' \uFEFF@cmd");
+  assert.equal(M.csvEscape('\uFF1D2+2'), "'\uFF1D2+2");
+  assert.equal(M.csvEscape(-10), '-10');
   assert.equal(M.csvEscape('has,comma'), '"has,comma"');
   assert.equal(M.csvEscape('say "hi"'), '"say ""hi"""');
   assert.equal(M.csvEscape('line\nbreak'), '"line\nbreak"');
